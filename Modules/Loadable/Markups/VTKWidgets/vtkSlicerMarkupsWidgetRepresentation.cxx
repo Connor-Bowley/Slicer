@@ -759,7 +759,7 @@ vtkStringArray* vtkSlicerMarkupsWidgetRepresentation::GetLabels(int controlPoint
 {
   if (controlPointType < 0 || controlPointType >= NumberOfControlPointTypes)
     {
-    vtkErrorMacro("vtkSlicerMarkupsWidgetRepresentation::GetControlPointsPolyData failed: invalid controlPointType: " << controlPointType);
+    vtkErrorMacro("vtkSlicerMarkupsWidgetRepresentation::GetLabels failed: invalid controlPointType: " << controlPointType);
     return nullptr;
     }
   return this->ControlPoints[controlPointType]->Labels;

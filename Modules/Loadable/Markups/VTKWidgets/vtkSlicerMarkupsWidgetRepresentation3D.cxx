@@ -179,12 +179,12 @@ vtkSlicerMarkupsWidgetRepresentation3D::vtkSlicerMarkupsWidgetRepresentation3D()
     }
 
   this->ControlPoints[Selected]->TextProperty->SetColor(1.0, 0.5, 0.5);
-  reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Selected])->Property->SetColor(1.0, 0.5, 0.5);
+  this->GetControlPointsPipeline(Selected)->Property->SetColor(1.0, 0.5, 0.5);
 
   this->ControlPoints[Active]->TextProperty->SetColor(0.4, 1.0, 0.); // bright green
-  reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Active])->Property->SetColor(0.4, 1.0, 0.);
-  reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Active])->Actor->PickableOff();
-  reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Active])->Actor->DragableOff();
+  this->GetControlPointsPipeline(Active)->Property->SetColor(0.4, 1.0, 0.);
+  this->GetControlPointsPipeline(Active)->Actor->PickableOff();
+  this->GetControlPointsPipeline(Active)->Actor->DragableOff();
 
   this->TextActor->SetTextProperty(this->GetControlPointsPipeline(Unselected)->TextProperty);
   this->TextActorPositionWorld[0] = 0.0;
@@ -245,12 +245,12 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateAllPointsAndLabelsFromMRML()
     return;
     }
 
-  int numPoints = markupsNode->GetNumberOfControlPoints();
+  const int numPoints = markupsNode->GetNumberOfControlPoints();
   std::vector<int> activeControlPointIndices;
   this->MarkupsDisplayNode->GetActiveControlPoints(activeControlPointIndices);
   for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
 
     if (controlPointType == Project || controlPointType == ProjectBack)
       {
@@ -783,7 +783,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::GetActors(vtkPropCollection *pc)
   Superclass::GetActors(pc);
   for (int i = 0; i < NumberOfControlPointTypes; i++)
    {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     controlPoints->Actor->GetActors(pc);
     controlPoints->OccludedActor->GetActors(pc);
     controlPoints->LabelsActor->GetActors(pc);
@@ -799,7 +799,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::ReleaseGraphicsResources(
   Superclass::ReleaseGraphicsResources(win);
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     controlPoints->Actor->ReleaseGraphicsResources(win);
     controlPoints->OccludedActor->ReleaseGraphicsResources(win);
     controlPoints->LabelsActor->ReleaseGraphicsResources(win);
@@ -815,7 +815,7 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderOverlay(vtkViewport *viewport)
   int count = Superclass::RenderOverlay(viewport);
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     if (!this->MarkupsDisplayNode->GetOccludedVisibility())
       {
       if (!zBuffer)
@@ -923,7 +923,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateControlPointGlyphOrientation(
 
   for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; controlPointType++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
     if (!controlPoints->Actor->GetVisibility())
       {
       continue;
@@ -1001,7 +1001,7 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderOpaqueGeometry(
 
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     if (controlPoints->Actor->GetVisibility())
       {
       if (updateControlPointSize)
@@ -1037,7 +1037,7 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderTranslucentPolygonalGeometry(
   int count = Superclass::RenderTranslucentPolygonalGeometry(viewport);
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     // The internal actor needs to share property keys.
     // This ensures the mapper state is consistent and allows depth peeling to work as expected.
     controlPoints->Actor->SetPropertyKeys(this->GetPropertyKeys());
@@ -1075,7 +1075,7 @@ vtkTypeBool vtkSlicerMarkupsWidgetRepresentation3D::HasTranslucentPolygonalGeome
     }
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     if (controlPoints->Actor->GetVisibility() && controlPoints->Actor->HasTranslucentPolygonalGeometry())
       {
       return true;
@@ -1106,9 +1106,9 @@ double *vtkSlicerMarkupsWidgetRepresentation3D::GetBounds()
   vtkBoundingBox boundingBox;
   const std::vector<vtkProp*> actors(
   {
-    reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Unselected])->Actor,
-    reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Selected])->Actor,
-    reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[Active])->Actor
+    this->GetControlPointsPipeline(Unselected)->Actor,
+    this->GetControlPointsPipeline(Selected)->Actor,
+    this->GetControlPointsPipeline(Active)->Actor
   });
   this->AddActorsBounds(boundingBox, actors, Superclass::GetBounds());
   boundingBox.GetBounds(this->Bounds);
@@ -1124,7 +1124,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::PrintSelf(ostream& os,
 
   for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[i]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
     os << indent << "Pipeline " << i << "\n";
     if (controlPoints->Actor)
       {
@@ -1189,7 +1189,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::OnRenderCompleted(vtkObject* caller
 //-----------------------------------------------------------------------------
 vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D* vtkSlicerMarkupsWidgetRepresentation3D::GetControlPointsPipeline(int controlPointType)
 {
-  return reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
+  return static_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
 }
 
 //-----------------------------------------------------------------------------
@@ -1208,7 +1208,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::SetRenderer(vtkRenderer *ren)
   Superclass::SetRenderer(ren);
   for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
     controlPoints->SelectVisiblePoints->SetRenderer(ren);
     }
 
@@ -1346,7 +1346,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateControlPointSize()
     }
   for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
     {
-    ControlPointsPipeline3D* controlPoints = reinterpret_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
+    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
     controlPoints->SelectVisiblePoints->SetToleranceWorld(this->ControlPointSize * 0.7);
     }
 }
