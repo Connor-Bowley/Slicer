@@ -159,6 +159,17 @@ protected:
     vtkSmartPointer<vtkProperty2D> Property;
   };
 
+  class ControlPointsPipelineManager
+  {
+  public:
+    inline ControlPointsPipeline2D* GetControlPointsPipeline(int controlPointType)
+    {
+      return &(ControlPoints[controlPointType]);
+    }
+  private:
+    ControlPointsPipeline2D ControlPoints[NumberOfControlPointTypes]; // Unselected, Selected, Active, Project, ProjectBehind
+  };
+
   ControlPointsPipeline2D* GetControlPointsPipeline(int controlPointType);
 
   vtkSmartPointer<vtkIntArray> PointsVisibilityOnSlice;
@@ -184,6 +195,8 @@ protected:
   };
 
 private:
+  ControlPointsPipelineManager ControlPointsPipelines;
+
   vtkSlicerMarkupsWidgetRepresentation2D(const vtkSlicerMarkupsWidgetRepresentation2D&) = delete;
   void operator=(const vtkSlicerMarkupsWidgetRepresentation2D&) = delete;
 };

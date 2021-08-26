@@ -171,22 +171,511 @@ vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D::ControlPointsPi
 vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D::~ControlPointsPipeline3D() = default;
 
 //----------------------------------------------------------------------
-vtkSlicerMarkupsWidgetRepresentation3D::vtkSlicerMarkupsWidgetRepresentation3D()
+
+vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::ControlPointsPipelineManager(vtkSlicerMarkupsWidgetRepresentation3D& parent)
+  : Parent(parent)
+  , ControlPointsPipelines()
 {
-  for (int i = 0; i<NumberOfControlPointTypes; i++)
+  this->ControlPointsPipelines[Selected].TextProperty->SetColor(1.0, 0.5, 0.5);
+  this->ControlPointsPipelines[Selected].Property->SetColor(1.0, 0.5, 0.5);
+  this->ControlPointsPipelines[Active].TextProperty->SetColor(0.4, 1.0, 0.); // bright green
+  this->ControlPointsPipelines[Active].Property->SetColor(0.4, 1.0, 0.);
+  this->ControlPointsPipelines[Active].Actor->PickableOff();
+  this->ControlPointsPipelines[Active].Actor->DragableOff();
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetActors(vtkPropCollection *pc)
+{
+  for (int i = 0; i < NumberOfControlPointTypes; i++)
     {
-    this->ControlPoints[i] = new ControlPointsPipeline3D;
+    this->ControlPointsPipelines[i].Actor->GetActors(pc);
+    this->ControlPointsPipelines[i].OccludedActor->GetActors(pc);
+    this->ControlPointsPipelines[i].LabelsActor->GetActors(pc);
+    this->ControlPointsPipelines[i].LabelsOccludedActor->GetActors(pc);
+    }
+}
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::ReleaseGraphicsResources(vtkWindow *win)
+{
+  for (int i = 0; i < NumberOfControlPointTypes; i++)
+    {
+    this->ControlPointsPipelines[i].Actor->ReleaseGraphicsResources(win);
+    this->ControlPointsPipelines[i].OccludedActor->ReleaseGraphicsResources(win);
+    this->ControlPointsPipelines[i].LabelsActor->ReleaseGraphicsResources(win);
+    this->ControlPointsPipelines[i].LabelsOccludedActor->ReleaseGraphicsResources(win);
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::UpdateAllPointsAndLabels(
+  vtkMRMLMarkupsDisplayNode* markupsDisplayNode, double controlPointSize)
+{
+  if (!markupsDisplayNode)
+    {
+    return;
+    }
+  vtkMRMLMarkupsNode* markupsNode = vtkMRMLMarkupsNode::SafeDownCast(markupsDisplayNode->GetDisplayableNode());
+  if (!markupsNode)
+    {
+    return;
+    }
+  const int numPoints = markupsNode->GetNumberOfControlPoints();
+  std::vector<int> activeControlPointIndices;
+  markupsDisplayNode->GetActiveControlPoints(activeControlPointIndices);
+  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
+    {
+    ControlPointsPipeline3D* controlPoints = &(this->ControlPointsPipelines[controlPointType]);
+
+    if (controlPointType == Project || controlPointType == ProjectBack)
+      {
+      // no projection display in 3D
+      controlPoints->Actor->SetVisibility(false);
+      controlPoints->OccludedActor->SetVisibility(false);
+      controlPoints->LabelsActor->SetVisibility(false);
+      controlPoints->LabelsOccludedActor->SetVisibility(false);
+      continue;
+      }
+
+    this->Parent.UpdateRelativeCoincidentTopologyOffsets(controlPoints->GlyphMapper, controlPoints->OccludedGlyphMapper);
+
+    controlPoints->GlyphMapper->SetScaleFactor(controlPointSize);
+    controlPoints->OccludedGlyphMapper->SetScaleFactor(controlPointSize);
+
+    controlPoints->ControlPoints->SetNumberOfPoints(0);
+    controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
+
+    controlPoints->LabelControlPoints->SetNumberOfPoints(0);
+    controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
+
+    controlPoints->Labels->SetNumberOfValues(0);
+    controlPoints->LabelsPriority->SetNumberOfValues(0);
+    controlPoints->ControlPointIndices->SetNumberOfValues(0);
+
+    for (int pointIndex = 0; pointIndex < numPoints; ++pointIndex)
+      {
+      if (!markupsNode->GetNthControlPointVisibility(pointIndex))
+        {
+        continue;
+        }
+      bool isPointActive = std::find(activeControlPointIndices.begin(), activeControlPointIndices.end(), pointIndex) != activeControlPointIndices.end();
+      switch (controlPointType)
+        {
+        case Active: if (!isPointActive) continue; break;
+        case Unselected: if (isPointActive || markupsNode->GetNthControlPointSelected(pointIndex)) continue; break;
+        case Selected: if (isPointActive || !markupsNode->GetNthControlPointSelected(pointIndex)) continue; break;
+        }
+
+      double worldPos[3] = { 0.0, 0.0, 0.0 };
+      markupsNode->GetNthControlPointPositionWorld(pointIndex, worldPos);
+      double pointNormalWorld[3] = { 0.0, 0.0, 1.0 };
+      markupsNode->GetNthControlPointNormalWorld(pointIndex, pointNormalWorld);
+
+      controlPoints->ControlPoints->InsertNextPoint(worldPos);
+
+      /* No offset for 3D actors - we may revisit this in the future
+      (we could also use text margins to add some space).
+      worldPos[0] += controlPointSize;
+      worldPos[1] += controlPointSize;
+      worldPos[2] += controlPointSize;
+      */
+      controlPoints->LabelControlPoints->InsertNextPoint(worldPos);
+      controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(pointNormalWorld);
+      controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(pointNormalWorld);
+      controlPoints->Labels->InsertNextValue(markupsNode->GetNthControlPointLabel(pointIndex));
+      controlPoints->LabelsPriority->InsertNextValue(std::to_string(pointIndex));
+      controlPoints->ControlPointIndices->InsertNextValue(pointIndex);
+      }
+
+    if (controlPoints->ControlPointIndices->GetNumberOfValues() > 0)
+      {
+      controlPoints->ControlPoints->Modified();
+      controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->Modified();
+      controlPoints->ControlPointsPolyData->Modified();
+
+      controlPoints->LabelControlPoints->Modified();
+      controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->Modified();
+      controlPoints->LabelControlPointsPolyData->Modified();
+
+      controlPoints->Actor->SetVisibility(true);
+      controlPoints->OccludedActor->SetVisibility(controlPoints->Actor->GetVisibility()
+        && markupsDisplayNode->GetOccludedVisibility() && markupsDisplayNode->GetOccludedOpacity() > 0.0);
+      // For backward compatibility, we hide labels if text scale is set to 0.
+      controlPoints->LabelsActor->SetVisibility(markupsDisplayNode->GetPointLabelsVisibility()
+        && markupsDisplayNode->GetTextScale() > 0.0);
+      controlPoints->LabelsOccludedActor->SetVisibility(controlPoints->LabelsActor->GetVisibility()
+        && markupsDisplayNode->GetOccludedVisibility() && markupsDisplayNode->GetOccludedOpacity() > 0.0);
+      }
+    else
+      {
+      controlPoints->Actor->SetVisibility(false);
+      controlPoints->OccludedActor->SetVisibility(false);
+      controlPoints->LabelsActor->SetVisibility(false);
+      controlPoints->LabelsOccludedActor->SetVisibility(false);
+      }
+    }
+}
+
+int vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::RenderOpaqueGeometry(
+  vtkViewport *viewport, const bool updateControlPointSize, const double controlPointSize)
+{
+  int count = 0;
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    if (controlPoints.Actor->GetVisibility())
+      {
+      if (updateControlPointSize)
+        {
+        controlPoints.GlyphMapper->SetScaleFactor(controlPointSize);
+        controlPoints.OccludedGlyphMapper->SetScaleFactor(controlPointSize);
+        controlPoints.SelectVisiblePoints->SetToleranceWorld(controlPointSize * 0.7);
+        }
+      count += controlPoints.Actor->RenderOpaqueGeometry(viewport);
+      }
+    if (controlPoints.OccludedActor->GetVisibility())
+      {
+      count += controlPoints.OccludedActor->RenderOpaqueGeometry(viewport);
+      }
+    if (controlPoints.LabelsActor->GetVisibility())
+      {
+      count += controlPoints.LabelsActor->RenderOpaqueGeometry(viewport);
+      }
+    if (controlPoints.LabelsOccludedActor->GetVisibility())
+      {
+      count += controlPoints.LabelsOccludedActor->RenderOpaqueGeometry(viewport);
+      }
+    }
+  return count;
+}
+
+int vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::RenderTranslucentPolygonalGeometry(
+  vtkViewport *viewport, vtkInformation* propertyKeys)
+{
+  int count = 0;
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    // The internal actor needs to share property keys.
+    // This ensures the mapper state is consistent and allows depth peeling to work as expected.
+    controlPoints.Actor->SetPropertyKeys(propertyKeys);
+    controlPoints.OccludedActor->SetPropertyKeys(propertyKeys);
+    if (controlPoints.Actor->GetVisibility())
+      {
+      count += controlPoints.Actor->RenderTranslucentPolygonalGeometry(viewport);
+      }
+    if (controlPoints.OccludedActor->GetVisibility())
+      {
+      count += controlPoints.OccludedActor->RenderTranslucentPolygonalGeometry(viewport);
+      }
+    if (controlPoints.LabelsActor->GetVisibility())
+      {
+      count += controlPoints.LabelsActor->RenderTranslucentPolygonalGeometry(viewport);
+      }
+    if (controlPoints.LabelsOccludedActor->GetVisibility())
+      {
+      count += controlPoints.LabelsOccludedActor->RenderTranslucentPolygonalGeometry(viewport);
+      }
+    }
+  return count;
+}
+
+vtkTypeBool vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::HasTranslucentPolygonalGeometry()
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    if ((controlPoints.Actor->GetVisibility() && controlPoints.Actor->HasTranslucentPolygonalGeometry())
+      || (controlPoints.OccludedActor->GetVisibility() && controlPoints.OccludedActor->HasTranslucentPolygonalGeometry())
+      || (controlPoints.LabelsActor->GetVisibility() && controlPoints.LabelsActor->HasTranslucentPolygonalGeometry())
+      || (controlPoints.LabelsOccludedActor->GetVisibility() && controlPoints.LabelsOccludedActor->HasTranslucentPolygonalGeometry()))
+      {
+      return true;
+      }
+    }
+  return false;
+}
+
+std::vector<vtkProp*> vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetUSAActors()
+{
+  return std::vector<vtkProp*>(
+    {
+      this->ControlPointsPipelines[Unselected].Actor,
+      this->ControlPointsPipelines[Selected].Actor,
+      this->ControlPointsPipelines[Active].Actor
+    });
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::PrintSelf(ostream& os, vtkIndent indent)
+{
+  for (int i = 0; i < NumberOfControlPointTypes; i++)
+    {
+    os << indent << "Pipeline " << i << "\n";
+    if (this->ControlPointsPipelines[i].Actor)
+      {
+       os << indent << "Points Visibility: " << this->ControlPointsPipelines[i].Actor->GetVisibility() << "\n";
+      }
+    else
+      {
+      os << indent << "Points: (none)\n";
+      }
+    if (this->ControlPointsPipelines[i].LabelsActor)
+      {
+      os << indent << "Labels Visibility: " << this->ControlPointsPipelines[i].LabelsActor->GetVisibility() << "\n";
+      }
+    else
+      {
+      os << indent << "Labels Points: (none)\n";
+      }
+    if (this->ControlPointsPipelines[i].Property)
+      {
+      os << indent << "Property: " << this->ControlPointsPipelines[i].Property << "\n";
+      }
+    else
+      {
+      os << indent << "Property: (none)\n";
+      }
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetRenderer(vtkRenderer *ren)
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    controlPoints.SelectVisiblePoints->SetRenderer(ren);
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetToleranceWorld(const double tolerance)
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    controlPoints.SelectVisiblePoints->SetToleranceWorld(tolerance);
+    }
+}
+
+bool vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetNthControlPointViewVisibility(
+  int n, bool nIsSelected)
+{
+  // Check SelectVisiblePoints output to see if the point is occluded or not.
+  // SelectVisiblePoints is very sensitive to when it is executed (it has to check the z buffer after
+  // opaque geometry is rendered but 2D labels are not yet), therefore we do not
+  // update its output but just use the last output generated for the last rendering.
+  for (int controlPointType = 0; controlPointType <= vtkSlicerMarkupsWidgetRepresentation3D::Active; ++controlPointType)
+    {
+    //we want to check Active and one of Selected/Unselected depending on if nIsSelected
+    if ((controlPointType == Unselected && nIsSelected)
+      || (controlPointType == Selected && !nIsSelected))
+      {
+      continue;
+      }
+    ControlPointsPipeline3D& controlPoints = this->ControlPointsPipelines[controlPointType];
+    if (controlPoints.VisiblePointsPolyData->GetPointData())
+      {
+      vtkIdTypeArray* visiblePointIndices = vtkIdTypeArray::SafeDownCast(
+        controlPoints.VisiblePointsPolyData->GetPointData()->GetAbstractArray("controlPointIndices"));
+      if (visiblePointIndices && visiblePointIndices->LookupValue(n) >= 0)
+        {
+        // visible
+        return true;
+        }
+      }
+    }
+  return false;
+}
+
+vtkSmartPointer<vtkTextProperty> vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetTextProperty(int controlPointType)
+{
+  return this->ControlPointsPipelines[controlPointType].TextProperty;
+}
+
+vtkSmartPointer<vtkProperty> vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetProperty(int controlPointType)
+{
+  return this->ControlPointsPipelines[controlPointType].Property;
+}
+
+vtkSmartPointer<vtkProperty> vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::GetOccludedProperty(int controlPointType)
+{
+  return this->ControlPointsPipelines[controlPointType].OccludedProperty;
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetColor(int controlPointType, double a[3])
+{
+  this->SetColor(controlPointType, a[0], a[1], a[2]);
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetColor(int controlPointType, double r, double g, double b)
+{
+  this->ControlPointsPipelines[controlPointType].Property->SetColor(r, g, b);
+  this->ControlPointsPipelines[controlPointType].TextProperty->SetColor(r, g, b);
+  this->ControlPointsPipelines[controlPointType].OccludedProperty->SetColor(r, g, b);
+  this->ControlPointsPipelines[controlPointType].OccludedTextProperty->SetColor(r, g, b);
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetOpacity(int controlPointType, double opacity, double textBackgroundOpacity)
+{
+  this->ControlPointsPipelines[controlPointType].Property->SetOpacity(opacity);
+  this->ControlPointsPipelines[controlPointType].TextProperty->SetOpacity(opacity);
+  this->ControlPointsPipelines[controlPointType].TextProperty->SetBackgroundOpacity(textBackgroundOpacity);
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetOccludedOpacity(int controlPointType, double opacity, double textBackgroundOpacity)
+{
+  this->ControlPointsPipelines[controlPointType].OccludedProperty->SetOpacity(opacity);
+  this->ControlPointsPipelines[controlPointType].OccludedTextProperty->SetOpacity(opacity);
+  this->ControlPointsPipelines[controlPointType].OccludedTextProperty->SetBackgroundOpacity(textBackgroundOpacity);
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetFontSize(int controlPointType, int size)
+{
+  this->ControlPointsPipelines[controlPointType].TextProperty->SetFontSize(size);
+  this->ControlPointsPipelines[controlPointType].OccludedTextProperty->SetFontSize(size);
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetGlyph3D()
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    controlPoints.GlyphMapper->SetSourceConnection(controlPoints.GlyphSourceSphere->GetOutputPort());
+    controlPoints.OccludedGlyphMapper->SetSourceConnection(controlPoints.GlyphSourceSphere->GetOutputPort());
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetGlyph2D(int type)
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    controlPoints.GlyphSource2D->SetGlyphType(type);
+    controlPoints.GlyphMapper->SetSourceConnection(controlPoints.GlyphSource2D->GetOutputPort());
+    controlPoints.OccludedGlyphMapper->SetSourceConnection(controlPoints.GlyphSource2D->GetOutputPort());
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::UpdateControlPointGlyphOrientation(vtkCamera* cam)
+{
+  if (!cam)
+    {
+    return;
     }
 
-  this->ControlPoints[Selected]->TextProperty->SetColor(1.0, 0.5, 0.5);
-  this->GetControlPointsPipeline(Selected)->Property->SetColor(1.0, 0.5, 0.5);
+  double cameraPosition[3] = { 0.0, 0.0, 0.0 };
+  cam->GetPosition(cameraPosition);
+  if (cam->GetParallelProjection())
+    {
+    // Glyphs face camera position.
+    // In case of parallel projection, glyphs must face the camera plane normal
+    // and not towards the camera position.
+    // Glyph filter can only set direction by specifying a point all glyphs face towards.
+    // To approximate facing the camera plane normal, we report a much farther camera position
+    // to the glypher. This way direction vectors form any points to the far point are
+    // approximately parallel to the camera plane normal.
+    double dop[3] = { 0.0 };
+    cam->GetDirectionOfProjection(dop);
+    double viewportHeight = cam->GetParallelScale();
+    double distance = 100.0 * viewportHeight;
+    cameraPosition[0] -= dop[0] * distance;
+    cameraPosition[1] -= dop[1] * distance;
+    cameraPosition[2] -= dop[2] * distance;
+    }
 
-  this->ControlPoints[Active]->TextProperty->SetColor(0.4, 1.0, 0.); // bright green
-  this->GetControlPointsPipeline(Active)->Property->SetColor(0.4, 1.0, 0.);
-  this->GetControlPointsPipeline(Active)->Actor->PickableOff();
-  this->GetControlPointsPipeline(Active)->Actor->DragableOff();
+  double viewUp[3] = { 0.0, 0.0, 0.0 };
+  cam->GetViewUp(viewUp);
 
-  this->TextActor->SetTextProperty(this->GetControlPointsPipeline(Unselected)->TextProperty);
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    if (!controlPoints.Actor->GetVisibility())
+      {
+      continue;
+      }
+
+    const int numPoints = controlPoints.ControlPoints->GetNumberOfPoints();
+
+    controlPoints.GlyphOrientationArray->SetNumberOfTuples(numPoints);
+
+    for (int pointIndex = 0; pointIndex < numPoints; ++pointIndex)
+      {
+      double worldPos[3] = { 0.0, 0.0, 0.0 };
+      controlPoints.ControlPoints->GetPoint(pointIndex, worldPos);
+
+      double cameraDirection[3] = { 0.0, 0.0, 0.0 };
+      vtkMath::Subtract(worldPos, cameraPosition, cameraDirection);
+      vtkMath::Normalize(cameraDirection);
+
+      double x[3] = { 0.0,0.0, 0.0 };
+      vtkMath::Cross(viewUp, cameraDirection, x);
+
+      double y[3] = { 0.0, 0.0, 0.0 };
+      vtkMath::Cross(cameraDirection, x, y);
+
+      double z[3] = { cameraDirection[0], cameraDirection[1], cameraDirection[2] };
+
+      double orientation[3][3];
+      for (int i = 0; i < 3; ++i)
+        {
+        orientation[i][0] = x[i];
+        orientation[i][1] = y[i];
+        orientation[i][2] = z[i];
+        }
+
+      double orientationQuaternion[4] = { 0.0 };
+      vtkMath::Matrix3x3ToQuaternion(orientation, orientationQuaternion);
+
+      controlPoints.GlyphOrientationArray->SetTuple4(pointIndex,
+        orientationQuaternion[0], orientationQuaternion[1], orientationQuaternion[2], orientationQuaternion[3]);
+      }
+    controlPoints.GlyphOrientationArray->Modified();
+    }
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::UpdateZBuffer(vtkFloatArray*& zBuffer)
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    if (!zBuffer)
+      {
+      controlPoints.SelectVisiblePoints->UpdateZBuffer();
+      zBuffer = controlPoints.SelectVisiblePoints->GetZBuffer();
+      }
+    else
+      {
+      controlPoints.SelectVisiblePoints->SetZBuffer(zBuffer);
+      }
+    controlPoints.SelectVisiblePoints->Update();
+    }
+}
+
+int vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::RenderOverlay(vtkViewport* viewport)
+{
+  int count = 0;
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    if (controlPoints.Actor->GetVisibility())
+      {
+      count += controlPoints.Actor->RenderOverlay(viewport);
+      }
+    if (controlPoints.OccludedActor->GetVisibility())
+      {
+      count += controlPoints.OccludedActor->RenderOverlay(viewport);
+      }
+    if (controlPoints.LabelsActor->GetVisibility())
+      {
+      count += controlPoints.LabelsActor->RenderOverlay(viewport);
+      }
+    if (controlPoints.LabelsOccludedActor->GetVisibility())
+      {
+      count += controlPoints.LabelsOccludedActor->RenderOverlay(viewport);
+      }
+    }
+  return count;
+}
+
+void vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipelineManager::SetAllPointsVisible()
+{
+  for (auto& controlPoints : this->ControlPointsPipelines)
+    {
+    controlPoints.VisiblePointsPolyData->DeepCopy(controlPoints.LabelControlPointsPolyData);
+    }
+}
+
+//----------------------------------------------------------------------
+vtkSlicerMarkupsWidgetRepresentation3D::vtkSlicerMarkupsWidgetRepresentation3D()
+  : ControlPointsPipelines(*this)
+{
+  this->TextActor->SetTextProperty(this->ControlPointsPipelines.GetTextProperty(Unselected));
   this->TextActorPositionWorld[0] = 0.0;
   this->TextActorPositionWorld[1] = 0.0;
   this->TextActorPositionWorld[2] = 0.0;
@@ -235,110 +724,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateNthPointAndLabelFromMRML(int 
 //----------------------------------------------------------------------
 void vtkSlicerMarkupsWidgetRepresentation3D::UpdateAllPointsAndLabelsFromMRML()
 {
-  if (!this->MarkupsDisplayNode)
-    {
-    return;
-    }
-  vtkMRMLMarkupsNode* markupsNode = this->GetMarkupsNode();
-  if (!markupsNode)
-    {
-    return;
-    }
-
-  const int numPoints = markupsNode->GetNumberOfControlPoints();
-  std::vector<int> activeControlPointIndices;
-  this->MarkupsDisplayNode->GetActiveControlPoints(activeControlPointIndices);
-  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-
-    if (controlPointType == Project || controlPointType == ProjectBack)
-      {
-      // no projection display in 3D
-      controlPoints->Actor->SetVisibility(false);
-      controlPoints->OccludedActor->SetVisibility(false);
-      controlPoints->LabelsActor->SetVisibility(false);
-      controlPoints->LabelsOccludedActor->SetVisibility(false);
-      continue;
-      }
-
-    this->UpdateRelativeCoincidentTopologyOffsets(controlPoints->GlyphMapper, controlPoints->OccludedGlyphMapper);
-
-    controlPoints->GlyphMapper->SetScaleFactor(this->ControlPointSize);
-    controlPoints->OccludedGlyphMapper->SetScaleFactor(this->ControlPointSize);
-
-    controlPoints->ControlPoints->SetNumberOfPoints(0);
-    controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
-
-    controlPoints->LabelControlPoints->SetNumberOfPoints(0);
-    controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
-
-    controlPoints->Labels->SetNumberOfValues(0);
-    controlPoints->LabelsPriority->SetNumberOfValues(0);
-    controlPoints->ControlPointIndices->SetNumberOfValues(0);
-
-    for (int pointIndex = 0; pointIndex < numPoints; ++pointIndex)
-      {
-      if (!markupsNode->GetNthControlPointVisibility(pointIndex))
-        {
-        continue;
-        }
-      bool isPointActive = std::find(activeControlPointIndices.begin(), activeControlPointIndices.end(), pointIndex) != activeControlPointIndices.end();
-      switch (controlPointType)
-        {
-        case Active: if (!isPointActive) continue; break;
-        case Unselected: if (isPointActive || markupsNode->GetNthControlPointSelected(pointIndex)) continue; break;
-        case Selected: if (isPointActive || !markupsNode->GetNthControlPointSelected(pointIndex)) continue; break;
-        }
-
-      double worldPos[3] = { 0.0, 0.0, 0.0 };
-      markupsNode->GetNthControlPointPositionWorld(pointIndex, worldPos);
-      double pointNormalWorld[3] = { 0.0, 0.0, 1.0 };
-      markupsNode->GetNthControlPointNormalWorld(pointIndex, pointNormalWorld);
-
-      controlPoints->ControlPoints->InsertNextPoint(worldPos);
-
-      /* No offset for 3D actors - we may revisit this in the future
-      (we could also use text margins to add some space).
-      worldPos[0] += this->ControlPointSize;
-      worldPos[1] += this->ControlPointSize;
-      worldPos[2] += this->ControlPointSize;
-      */
-      controlPoints->LabelControlPoints->InsertNextPoint(worldPos);
-      controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(pointNormalWorld);
-      controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(pointNormalWorld);
-      controlPoints->Labels->InsertNextValue(markupsNode->GetNthControlPointLabel(pointIndex));
-      controlPoints->LabelsPriority->InsertNextValue(std::to_string(pointIndex));
-      controlPoints->ControlPointIndices->InsertNextValue(pointIndex);
-      }
-
-    if (controlPoints->ControlPointIndices->GetNumberOfValues() > 0)
-      {
-      controlPoints->ControlPoints->Modified();
-      controlPoints->ControlPointsPolyData->GetPointData()->GetNormals()->Modified();
-      controlPoints->ControlPointsPolyData->Modified();
-
-      controlPoints->LabelControlPoints->Modified();
-      controlPoints->LabelControlPointsPolyData->GetPointData()->GetNormals()->Modified();
-      controlPoints->LabelControlPointsPolyData->Modified();
-
-      controlPoints->Actor->SetVisibility(true);
-      controlPoints->OccludedActor->SetVisibility(controlPoints->Actor->GetVisibility()
-        && this->MarkupsDisplayNode->GetOccludedVisibility() && this->MarkupsDisplayNode->GetOccludedOpacity() > 0.0);
-      // For backward compatibility, we hide labels if text scale is set to 0.
-      controlPoints->LabelsActor->SetVisibility(this->MarkupsDisplayNode->GetPointLabelsVisibility()
-        && this->MarkupsDisplayNode->GetTextScale() > 0.0);
-      controlPoints->LabelsOccludedActor->SetVisibility(controlPoints->LabelsActor->GetVisibility()
-        && this->MarkupsDisplayNode->GetOccludedVisibility() && this->MarkupsDisplayNode->GetOccludedOpacity() > 0.0);
-      }
-    else
-      {
-      controlPoints->Actor->SetVisibility(false);
-      controlPoints->OccludedActor->SetVisibility(false);
-      controlPoints->LabelsActor->SetVisibility(false);
-      controlPoints->LabelsOccludedActor->SetVisibility(false);
-      }
-    }
+  this->ControlPointsPipelines.UpdateAllPointsAndLabels(this->MarkupsDisplayNode, this->ControlPointSize);
 }
 
 //----------------------------------------------------------------------
@@ -412,7 +798,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::CanInteract(
       }
     }
 
-  vtkIdType numberOfPoints = markupsNode->GetNumberOfControlPoints();
+  const vtkIdType numberOfPoints = markupsNode->GetNumberOfControlPoints();
   for (int i = 0; i < numberOfPoints; i++)
     {
     if (!markupsNode->GetNthControlPointVisibility(i))
@@ -424,42 +810,11 @@ void vtkSlicerMarkupsWidgetRepresentation3D::CanInteract(
     markupsNode->GetNthControlPointPositionWorld(i, centerPosWorld);
     this->Renderer->SetWorldPoint(centerPosWorld);
 
-    // Check SelectVisiblePoints output to see if the point is occluded or not.
-    // SelectVisiblePoints is very sensitive to when it is executed (it has to check the z buffer after
-    // opaque geometry is rendered but 2D labels are not yet), therefore we do not
-    // update its output but just use the last output generated for the last rendering.
-    bool pointVisible = false;
-    if (this->MarkupsDisplayNode
+    const bool pointVisible = (this->MarkupsDisplayNode
       && this->MarkupsDisplayNode->GetOccludedVisibility()
       && this->MarkupsDisplayNode->GetOccludedOpacity() > 0.0)
-      {
-      pointVisible = true;
-      }
-    for (int controlPointType = 0; controlPointType <= Active && !pointVisible; ++controlPointType)
-      {
-      if ((controlPointType == Unselected && markupsNode->GetNthControlPointSelected(i))
-        || (controlPointType == Selected && !markupsNode->GetNthControlPointSelected(i)))
-        {
-        continue;
-        }
-      ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-      if (!controlPoints->VisiblePointsPolyData->GetPointData())
-        {
-        continue;
-        }
-      vtkIdTypeArray* visiblePointIndices = vtkIdTypeArray::SafeDownCast(
-        controlPoints->VisiblePointsPolyData->GetPointData()->GetAbstractArray("controlPointIndices"));
-      if (!visiblePointIndices)
-        {
-        continue;
-        }
-      if (visiblePointIndices->LookupValue(i) >= 0)
-        {
-        // visible
-        pointVisible = true;
-        break;
-        }
-      }
+      || this->ControlPointsPipelines.GetNthControlPointViewVisibility(i, markupsNode->GetNthControlPointSelected(i));
+
     if (!pointVisible)
       {
       continue;
@@ -640,7 +995,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::CanInteractWithLine(
     return;
     }
 
-  vtkIdType numberOfPoints = markupsNode->GetNumberOfControlPoints();
+  const vtkIdType numberOfPoints = markupsNode->GetNumberOfControlPoints();
 
   double pointWorldPos1[4] = { 0.0, 0.0, 0.0, 1.0 };
   double pointWorldPos2[4] = { 0.0, 0.0, 0.0, 1.0 };
@@ -694,53 +1049,34 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller,
     double* color = this->GetWidgetColor(controlPointType);
     double opacity = this->MarkupsDisplayNode->GetOpacity() * hierarchyOpacity;
 
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    controlPoints->Property->SetColor(color);
-    controlPoints->Property->SetOpacity(opacity);
-
-    controlPoints->TextProperty->ShallowCopy(this->MarkupsDisplayNode->GetTextProperty());
-    controlPoints->TextProperty->SetColor(color);
-    controlPoints->TextProperty->SetOpacity(opacity);
-    controlPoints->TextProperty->SetFontSize(static_cast<int>(this->MarkupsDisplayNode->GetTextProperty()->GetFontSize()
+    this->ControlPointsPipelines.SetColor(controlPointType, color);
+    this->ControlPointsPipelines.SetOpacity(controlPointType, opacity, opacity * this->MarkupsDisplayNode->GetTextProperty()->GetBackgroundOpacity());
+    this->ControlPointsPipelines.SetFontSize(controlPointType, static_cast<int>(this->MarkupsDisplayNode->GetTextProperty()->GetFontSize()
       * this->MarkupsDisplayNode->GetTextScale()));
-    controlPoints->TextProperty->SetBackgroundOpacity(opacity * this->MarkupsDisplayNode->GetTextProperty()->GetBackgroundOpacity());
-
-    controlPoints->OccludedProperty->SetColor(color);
-    controlPoints->OccludedTextProperty->ShallowCopy(controlPoints->TextProperty);
+    //TODO: // controlPoints->TextProperty->ShallowCopy(this->MarkupsDisplayNode->GetTextProperty());
     if (this->MarkupsDisplayNode->GetOccludedVisibility() && this->MarkupsDisplayNode->GetOccludedOpacity() > 0.0)
       {
-      // To prevent some rendering artifacts, and to ensure that the occluded actor does not block point visibility,
-      // the maximum opacity of the occluded actor is required to be almost, but not fully opaque.
-      double occludedOpacity =
+      const double occludedOpacity =
         std::min(0.99, this->MarkupsDisplayNode->GetOccludedOpacity() * opacity);
-      controlPoints->OccludedProperty->SetOpacity(occludedOpacity);
-      controlPoints->OccludedTextProperty->SetOpacity(occludedOpacity);
-      controlPoints->OccludedTextProperty->SetBackgroundOpacity(occludedOpacity
-        * this->MarkupsDisplayNode->GetTextProperty()->GetBackgroundOpacity());
+      const double occludedBackgroundOpacity = occludedOpacity
+        * this->MarkupsDisplayNode->GetTextProperty()->GetBackgroundOpacity();
+      this->ControlPointsPipelines.SetOccludedOpacity(controlPointType, occludedOpacity, occludedBackgroundOpacity);
       }
     else
       {
-      controlPoints->OccludedProperty->SetOpacity(0.0);
-      controlPoints->OccludedTextProperty->SetOpacity(0.0);
-      }
-
-    if (this->MarkupsDisplayNode->GlyphTypeIs3D())
-      {
-      this->GetControlPointsPipeline(controlPointType)->GlyphMapper->SetSourceConnection(
-        this->GetControlPointsPipeline(controlPointType)->GlyphSourceSphere->GetOutputPort());
-      this->GetControlPointsPipeline(controlPointType)->OccludedGlyphMapper->SetSourceConnection(
-        this->GetControlPointsPipeline(controlPointType)->GlyphSourceSphere->GetOutputPort());
-      }
-    else
-      {
-      vtkMarkupsGlyphSource2D* glyphSource = this->GetControlPointsPipeline(controlPointType)->GlyphSource2D;
-      glyphSource->SetGlyphType(this->GetGlyphTypeSourceFromDisplay(this->MarkupsDisplayNode->GetGlyphType()));
-      this->GetControlPointsPipeline(controlPointType)->GlyphMapper->SetSourceConnection(glyphSource->GetOutputPort());
-      this->GetControlPointsPipeline(controlPointType)->OccludedGlyphMapper->SetSourceConnection(glyphSource->GetOutputPort());
+      this->ControlPointsPipelines.SetOccludedOpacity(controlPointType, 0.0, 0.0);
       }
     }
+  if (this->MarkupsDisplayNode->GlyphTypeIs3D())
+    {
+    this->ControlPointsPipelines.SetGlyph3D();
+    }
+  else
+    {
+    this->ControlPointsPipelines.SetGlyph2D(this->GetGlyphTypeSourceFromDisplay(this->MarkupsDisplayNode->GetGlyphType()));
+    }
 
-  this->TextActor->SetTextProperty(this->GetControlPointsPipeline(Unselected)->TextProperty);
+  this->TextActor->SetTextProperty(this->ControlPointsPipelines.GetTextProperty(Unselected));
 
   /* TODO: implement this for better performance
   if (event == )
@@ -767,14 +1103,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller,
 void vtkSlicerMarkupsWidgetRepresentation3D::GetActors(vtkPropCollection *pc)
 {
   Superclass::GetActors(pc);
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-   {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    controlPoints->Actor->GetActors(pc);
-    controlPoints->OccludedActor->GetActors(pc);
-    controlPoints->LabelsActor->GetActors(pc);
-    controlPoints->LabelsOccludedActor->GetActors(pc);
-    }
+  this->ControlPointsPipelines.GetActors(pc);
   this->TextActor->GetActors(pc);
 }
 
@@ -783,14 +1112,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::ReleaseGraphicsResources(
   vtkWindow *win)
 {
   Superclass::ReleaseGraphicsResources(win);
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    controlPoints->Actor->ReleaseGraphicsResources(win);
-    controlPoints->OccludedActor->ReleaseGraphicsResources(win);
-    controlPoints->LabelsActor->ReleaseGraphicsResources(win);
-    controlPoints->LabelsOccludedActor->ReleaseGraphicsResources(win);
-    }
+  this->ControlPointsPipelines.ReleaseGraphicsResources(win);
   this->TextActor->ReleaseGraphicsResources(win);
 }
 
@@ -799,45 +1121,20 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderOverlay(vtkViewport *viewport)
 {
   vtkFloatArray* zBuffer = vtkSlicerMarkupsWidgetRepresentation3D::GetCachedZBuffer(this->Renderer);
   int count = Superclass::RenderOverlay(viewport);
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
+  if (!this->MarkupsDisplayNode->GetOccludedVisibility())
     {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    if (!this->MarkupsDisplayNode->GetOccludedVisibility())
-      {
-      if (!zBuffer)
-        {
-        controlPoints->SelectVisiblePoints->UpdateZBuffer();
-        zBuffer = controlPoints->SelectVisiblePoints->GetZBuffer();
-        vtkSlicerMarkupsWidgetRepresentation3D::CachedZBuffers[this->Renderer] = zBuffer;
-        }
-      else
-        {
-        controlPoints->SelectVisiblePoints->SetZBuffer(zBuffer);
-        }
-      controlPoints->SelectVisiblePoints->Update();
-      }
-    else
-      {
-      controlPoints->VisiblePointsPolyData->DeepCopy(controlPoints->LabelControlPointsPolyData);
-      }
-
-    if (controlPoints->Actor->GetVisibility())
-      {
-      count += controlPoints->Actor->RenderOverlay(viewport);
-      }
-    if (controlPoints->OccludedActor->GetVisibility())
-      {
-      count += controlPoints->OccludedActor->RenderOverlay(viewport);
-      }
-    if (controlPoints->LabelsActor->GetVisibility())
-      {
-      count += controlPoints->LabelsActor->RenderOverlay(viewport);
-      }
-    if (controlPoints->LabelsOccludedActor->GetVisibility())
-      {
-      count += controlPoints->LabelsOccludedActor->RenderOverlay(viewport);
-      }
+    //this takes the pointer by reference and uses zBuffer if not nullptr.
+    //if zBuffer is nullptr it will update zBuffer ptr with new non-owning zBuffer
+    this->ControlPointsPipelines.UpdateZBuffer(zBuffer);
+    //at worst we are re-assigning this the same value it was
+    vtkSlicerMarkupsWidgetRepresentation3D::CachedZBuffers[this->Renderer] = zBuffer;
     }
+  else
+    {
+    this->ControlPointsPipelines.SetAllPointsVisible();
+    }
+
+  count += this->ControlPointsPipelines.RenderOverlay(viewport);
 
   this->TextActorOccluded = false;
   if (this->TextActor->GetVisibility() && this->MarkupsNode && this->MarkupsDisplayNode)
@@ -878,80 +1175,7 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderOverlay(vtkViewport *viewport)
 //-----------------------------------------------------------------------------
 void vtkSlicerMarkupsWidgetRepresentation3D::UpdateControlPointGlyphOrientation()
 {
-  vtkCamera* cam = this->Renderer->GetActiveCamera();
-  if (!cam)
-    {
-    return;
-    }
-
-  double cameraPosition[3] = { 0.0, 0.0, 0.0 };
-  cam->GetPosition(cameraPosition);
-  if (cam->GetParallelProjection())
-    {
-    // Glyphs face camera position.
-    // In case of parallel projection, glyphs must face the camera plane normal
-    // and not towards the camera position.
-    // Glyph filter can only set direction by specifying a point all glyphs face towards.
-    // To approximate facing the camera plane normal, we report a much farther camera position
-    // to the glypher. This way direction vectors form any points to the far point are
-    // approximately parallel to the camera plane normal.
-    double dop[3] = { 0.0 };
-    cam->GetDirectionOfProjection(dop);
-    double viewportHeight = cam->GetParallelScale();
-    double distance = 100.0 * viewportHeight;
-    cameraPosition[0] -= dop[0] * distance;
-    cameraPosition[1] -= dop[1] * distance;
-    cameraPosition[2] -= dop[2] * distance;
-    }
-
-  double viewUp[3] = { 0.0, 0.0, 0.0 };
-  cam->GetViewUp(viewUp);
-
-  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; controlPointType++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    if (!controlPoints->Actor->GetVisibility())
-      {
-      continue;
-      }
-
-    int numPoints = controlPoints->ControlPoints->GetNumberOfPoints();
-
-    controlPoints->GlyphOrientationArray->SetNumberOfTuples(numPoints);
-
-    for (int pointIndex = 0; pointIndex < numPoints; ++pointIndex)
-      {
-      double worldPos[3] = { 0.0, 0.0, 0.0 };
-      controlPoints->ControlPoints->GetPoint(pointIndex, worldPos);
-
-      double cameraDirection[3] = { 0.0, 0.0, 0.0 };
-      vtkMath::Subtract(worldPos, cameraPosition, cameraDirection);
-      vtkMath::Normalize(cameraDirection);
-
-      double x[3] = { 0.0,0.0, 0.0 };
-      vtkMath::Cross(viewUp, cameraDirection, x);
-
-      double y[3] = { 0.0, 0.0, 0.0 };
-      vtkMath::Cross(cameraDirection, x, y);
-
-      double z[3] = { cameraDirection[0], cameraDirection[1], cameraDirection[2] };
-
-      double orientation[3][3];
-      for (int i = 0; i < 3; ++i)
-        {
-        orientation[i][0] = x[i];
-        orientation[i][1] = y[i];
-        orientation[i][2] = z[i];
-        }
-
-      double orientationQuaternion[4] = { 0.0 };
-      vtkMath::Matrix3x3ToQuaternion(orientation, orientationQuaternion);
-
-      controlPoints->GlyphOrientationArray->SetTuple4(pointIndex,
-        orientationQuaternion[0], orientationQuaternion[1], orientationQuaternion[2], orientationQuaternion[3]);
-      }
-    controlPoints->GlyphOrientationArray->Modified();
-    }
+  this->ControlPointsPipelines.UpdateControlPointGlyphOrientation(this->Renderer->GetActiveCamera());
 }
 
 //-----------------------------------------------------------------------------
@@ -984,34 +1208,8 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderOpaqueGeometry(
   this->UpdateControlPointGlyphOrientation();
 
   int count = Superclass::RenderOpaqueGeometry(viewport);
-
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    if (controlPoints->Actor->GetVisibility())
-      {
-      if (updateControlPointSize)
-        {
-        controlPoints->GlyphMapper->SetScaleFactor(this->ControlPointSize);
-        controlPoints->OccludedGlyphMapper->SetScaleFactor(this->ControlPointSize);
-        controlPoints->SelectVisiblePoints->SetToleranceWorld(this->ControlPointSize * 0.7);
-        }
-      count += controlPoints->Actor->RenderOpaqueGeometry(viewport);
-      }
-    if (controlPoints->OccludedActor->GetVisibility())
-      {
-      count += controlPoints->OccludedActor->RenderOpaqueGeometry(viewport);
-      }
-    if (controlPoints->LabelsActor->GetVisibility())
-      {
-      count += controlPoints->LabelsActor->RenderOpaqueGeometry(viewport);
-      }
-    if (controlPoints->LabelsOccludedActor->GetVisibility())
-      {
-      count += controlPoints->LabelsOccludedActor->RenderOpaqueGeometry(viewport);
-      }
-    count += this->TextActor->RenderOpaqueGeometry(viewport);
-    }
+  count += this->ControlPointsPipelines.RenderOpaqueGeometry(viewport, updateControlPointSize, this->ControlPointSize);
+  count += this->TextActor->RenderOpaqueGeometry(viewport);
 
   return count;
 }
@@ -1021,30 +1219,7 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderTranslucentPolygonalGeometry(
   vtkViewport *viewport)
 {
   int count = Superclass::RenderTranslucentPolygonalGeometry(viewport);
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    // The internal actor needs to share property keys.
-    // This ensures the mapper state is consistent and allows depth peeling to work as expected.
-    controlPoints->Actor->SetPropertyKeys(this->GetPropertyKeys());
-    controlPoints->OccludedActor->SetPropertyKeys(this->GetPropertyKeys());
-    if (controlPoints->Actor->GetVisibility())
-      {
-      count += controlPoints->Actor->RenderTranslucentPolygonalGeometry(viewport);
-      }
-    if (controlPoints->OccludedActor->GetVisibility())
-      {
-      count += controlPoints->OccludedActor->RenderTranslucentPolygonalGeometry(viewport);
-      }
-    if (controlPoints->LabelsActor->GetVisibility())
-      {
-      count += controlPoints->LabelsActor->RenderTranslucentPolygonalGeometry(viewport);
-      }
-    if (controlPoints->LabelsOccludedActor->GetVisibility())
-      {
-      count += controlPoints->LabelsOccludedActor->RenderTranslucentPolygonalGeometry(viewport);
-      }
-    }
+  count += this->ControlPointsPipelines.RenderTranslucentPolygonalGeometry(viewport, this->GetPropertyKeys());
   if (this->TextActor->GetVisibility() && !this->TextActorOccluded)
     {
     count += this->TextActor->RenderTranslucentPolygonalGeometry(viewport);
@@ -1055,48 +1230,16 @@ int vtkSlicerMarkupsWidgetRepresentation3D::RenderTranslucentPolygonalGeometry(
 //-----------------------------------------------------------------------------
 vtkTypeBool vtkSlicerMarkupsWidgetRepresentation3D::HasTranslucentPolygonalGeometry()
 {
-  if (this->Superclass::HasTranslucentPolygonalGeometry())
-    {
-    return true;
-    }
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    if (controlPoints->Actor->GetVisibility() && controlPoints->Actor->HasTranslucentPolygonalGeometry())
-      {
-      return true;
-      }
-    if (controlPoints->OccludedActor->GetVisibility() && controlPoints->OccludedActor->HasTranslucentPolygonalGeometry())
-      {
-      return true;
-      }
-    if (controlPoints->LabelsActor->GetVisibility() && controlPoints->LabelsActor->HasTranslucentPolygonalGeometry())
-      {
-      return true;
-      }
-    if (controlPoints->LabelsOccludedActor->GetVisibility() && controlPoints->LabelsOccludedActor->HasTranslucentPolygonalGeometry())
-      {
-      return true;
-      }
-    }
-  if (this->TextActor->GetVisibility() && !this->TextActorOccluded && this->TextActor->HasTranslucentPolygonalGeometry())
-    {
-    return true;
-    }
-  return false;
+  return this->Superclass::HasTranslucentPolygonalGeometry()
+    || this->ControlPointsPipelines.HasTranslucentPolygonalGeometry()
+    || (this->TextActor->GetVisibility() && !this->TextActorOccluded && this->TextActor->HasTranslucentPolygonalGeometry());
 }
 
 //-----------------------------------------------------------------------------
 double *vtkSlicerMarkupsWidgetRepresentation3D::GetBounds()
 {
   vtkBoundingBox boundingBox;
-  const std::vector<vtkProp*> actors(
-  {
-    this->GetControlPointsPipeline(Unselected)->Actor,
-    this->GetControlPointsPipeline(Selected)->Actor,
-    this->GetControlPointsPipeline(Active)->Actor
-  });
-  this->AddActorsBounds(boundingBox, actors, Superclass::GetBounds());
+  this->AddActorsBounds(boundingBox, this->ControlPointsPipelines.GetUSAActors(), Superclass::GetBounds());
   boundingBox.GetBounds(this->Bounds);
   return this->Bounds;
 }
@@ -1108,35 +1251,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::PrintSelf(ostream& os,
   //Superclass typedef defined in vtkTypeMacro() found in vtkSetGet.h
   this->Superclass::PrintSelf(os, indent);
 
-  for (int i = 0; i < NumberOfControlPointTypes; i++)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(i);
-    os << indent << "Pipeline " << i << "\n";
-    if (controlPoints->Actor)
-      {
-       os << indent << "Points Visibility: " << controlPoints->Actor->GetVisibility() << "\n";
-      }
-    else
-      {
-      os << indent << "Points: (none)\n";
-      }
-    if (controlPoints->LabelsActor)
-      {
-      os << indent << "Labels Visibility: " << controlPoints->LabelsActor->GetVisibility() << "\n";
-      }
-    else
-      {
-      os << indent << "Labels Points: (none)\n";
-      }
-    if (controlPoints->Property)
-      {
-      os << indent << "Property: " << controlPoints->Property << "\n";
-      }
-    else
-      {
-      os << indent << "Property: (none)\n";
-      }
-    }
+  this->ControlPointsPipelines.PrintSelf(os, indent);
   if (this->TextActor)
     {
     os << indent << "Text Visibility: " << this->TextActor->GetVisibility() << "\n";
@@ -1163,19 +1278,13 @@ vtkFloatArray* vtkSlicerMarkupsWidgetRepresentation3D::GetCachedZBuffer(vtkRende
 }
 
 //---------------------------------------------------------------------------
-void vtkSlicerMarkupsWidgetRepresentation3D::OnRenderCompleted(vtkObject* caller, unsigned long event, void* clientData, void* callData)
+void vtkSlicerMarkupsWidgetRepresentation3D::OnRenderCompleted(vtkObject* caller, unsigned long vtkNotUsed(event), void* vtkNotUsed(clientData), void* vtkNotUsed(callData))
 {
   vtkRenderer* renderer = vtkRenderer::SafeDownCast(caller);
   if (renderer && vtkSlicerMarkupsWidgetRepresentation3D::GetCachedZBuffer(renderer))
     {
     vtkSlicerMarkupsWidgetRepresentation3D::CachedZBuffers.erase(renderer);
     }
-}
-
-//-----------------------------------------------------------------------------
-vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D* vtkSlicerMarkupsWidgetRepresentation3D::GetControlPointsPipeline(int controlPointType)
-{
-  return static_cast<ControlPointsPipeline3D*>(this->ControlPoints[controlPointType]);
 }
 
 //-----------------------------------------------------------------------------
@@ -1192,11 +1301,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::SetRenderer(vtkRenderer *ren)
     }
 
   Superclass::SetRenderer(ren);
-  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    controlPoints->SelectVisiblePoints->SetRenderer(ren);
-    }
+  this->ControlPointsPipelines.SetRenderer(ren);
 
   if (this->Renderer)
     {
@@ -1342,11 +1447,7 @@ void vtkSlicerMarkupsWidgetRepresentation3D::UpdateControlPointSize()
     {
     this->ControlPointSize = this->MarkupsDisplayNode->GetGlyphSize();
     }
-  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    controlPoints->SelectVisiblePoints->SetToleranceWorld(this->ControlPointSize * 0.7);
-    }
+  this->ControlPointsPipelines.SetToleranceWorld(this->ControlPointSize * 0.7);
 }
 
 //----------------------------------------------------------------------
@@ -1358,35 +1459,7 @@ bool vtkSlicerMarkupsWidgetRepresentation3D::GetNthControlPointViewVisibility(in
     return false;
     }
 
-  // Check SelectVisiblePoints output to see if the point is occluded or not.
-  // SelectVisiblePoints is very sensitive to when it is executed (it has to check the z buffer after
-  // opaque geometry is rendered but 2D labels are not yet), therefore we do not
-  // update its output but just use the last output generated for the last rendering.
-  for (int controlPointType = 0; controlPointType <= Active; ++controlPointType)
-    {
-    if ((controlPointType == Unselected && markupsNode->GetNthControlPointSelected(n))
-      || (controlPointType == Selected && !markupsNode->GetNthControlPointSelected(n)))
-      {
-      continue;
-      }
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    if (!controlPoints->VisiblePointsPolyData->GetPointData())
-      {
-      continue;
-      }
-    vtkIdTypeArray* visiblePointIndices = vtkIdTypeArray::SafeDownCast(
-      controlPoints->VisiblePointsPolyData->GetPointData()->GetAbstractArray("controlPointIndices"));
-    if (!visiblePointIndices)
-      {
-      continue;
-      }
-    if (visiblePointIndices->LookupValue(n) >= 0)
-      {
-      // visible
-      return true;
-      }
-    }
-  return false;
+  return this->ControlPointsPipelines.GetNthControlPointViewVisibility(n, markupsNode->GetNthControlPointSelected(n));
 }
 
 //----------------------------------------------------------------------

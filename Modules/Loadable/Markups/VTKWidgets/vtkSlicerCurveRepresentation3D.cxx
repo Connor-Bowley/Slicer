@@ -57,11 +57,11 @@ vtkSlicerCurveRepresentation3D::vtkSlicerCurveRepresentation3D()
   // Actors
   this->LineActor = vtkSmartPointer<vtkActor>::New();
   this->LineActor->SetMapper(this->LineMapper);
-  this->LineActor->SetProperty(this->GetControlPointsPipeline(Unselected)->Property);
+  this->LineActor->SetProperty(this->ControlPointsPipelines.GetProperty(Unselected));
 
   this->LineOccludedActor = vtkSmartPointer<vtkActor>::New();
   this->LineOccludedActor->SetMapper(this->LineOccludedMapper);
-  this->LineOccludedActor->SetProperty(this->GetControlPointsPipeline(Unselected)->OccludedProperty);
+  this->LineOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(Unselected));
 
   this->CurvePointLocator = vtkSmartPointer<vtkCellLocator>::New();
 
@@ -116,29 +116,6 @@ void vtkSlicerCurveRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller, unsigne
     this->TextActor->SetVisibility(false);
     }
 
-  // Line display
-
-  for (int controlPointType = 0; controlPointType < NumberOfControlPointTypes; ++controlPointType)
-    {
-    ControlPointsPipeline3D* controlPoints = this->GetControlPointsPipeline(controlPointType);
-    if (controlPointType == Project || controlPointType == ProjectBack)
-      {
-      // no projection display in 3D
-      controlPoints->Actor->SetVisibility(false);
-      controlPoints->OccludedActor->SetVisibility(false);
-      controlPoints->LabelsActor->SetVisibility(false);
-      controlPoints->LabelsOccludedActor->SetVisibility(false);
-      continue;
-      }
-
-    // For backward compatibility, we hide labels if text scale is set to 0.
-    controlPoints->LabelsActor->SetVisibility(this->MarkupsDisplayNode->GetPointLabelsVisibility()
-      && this->MarkupsDisplayNode->GetTextScale() > 0.0);
-    controlPoints->GlyphMapper->SetScaleFactor(this->ControlPointSize);
-
-    this->UpdateRelativeCoincidentTopologyOffsets(controlPoints->GlyphMapper, controlPoints->OccludedGlyphMapper);
-    }
-
   this->UpdateRelativeCoincidentTopologyOffsets(this->LineMapper, this->LineOccludedMapper);
 
   double diameter = ( this->MarkupsDisplayNode->GetCurveLineSizeMode() == vtkMRMLMarkupsDisplayNode::UseLineDiameter ?
@@ -153,48 +130,51 @@ void vtkSlicerCurveRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller, unsigne
     {
     controlPointType = allControlPointsSelected ? Selected : Unselected;
     }
-  this->LineActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->Property);
+  this->LineActor->SetProperty(this->ControlPointsPipelines.GetProperty(controlPointType));
 
-  this->TextActor->SetTextProperty(this->GetControlPointsPipeline(controlPointType)->TextProperty);
+  this->TextActor->SetTextProperty(this->ControlPointsPipelines.GetTextProperty(controlPointType));
 
-  this->LineOccludedActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->OccludedProperty);
+  this->LineOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(controlPointType));
   this->LineOccludedActor->SetVisibility(this->MarkupsDisplayNode
     && this->LineActor->GetVisibility()
     && this->MarkupsDisplayNode->GetOccludedVisibility());
 
-  bool allNodesHidden = true;
-  for (int controlPointIndex = 0; controlPointIndex < markupsNode->GetNumberOfControlPoints(); controlPointIndex++)
-    {
-    if (markupsNode->GetNthControlPointVisibility(controlPointIndex))
-      {
-      allNodesHidden = false;
-      break;
-      }
-    }
+  /////////////////////////////////////////////////////////////////////////////////////
+  //TODO: This doesn't actually work because this->CurveClosed is never really updated
+  //but if you do markupsNode->GetCurveClosed() this works
+  /////////////////////////////////////////////////////////////////////////////////////
+  // bool allNodesHidden = true;
+  // for (int controlPointIndex = 0; controlPointIndex < markupsNode->GetNumberOfControlPoints(); controlPointIndex++)
+  //   {
+  //   if (markupsNode->GetNthControlPointVisibility(controlPointIndex))
+  //     {
+  //     allNodesHidden = false;
+  //     break;
+  //     }
+  //   }
+  // if (this->CurveClosed && markupsNode->GetNumberOfControlPoints() > 2 && !allNodesHidden)
+  //   {
+  //   double centerPosWorld[3], orient[3] = { 0 };
+  //   markupsNode->GetCenterPosition(centerPosWorld);
+  //   int centerControlPointType = allControlPointsSelected ? Selected : Unselected;
+  //   if (this->MarkupsDisplayNode->GetActiveComponentType() == vtkMRMLMarkupsDisplayNode::ComponentCenterPoint)
+  //     {
+  //     centerControlPointType = Active;
+  //     this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->SetNumberOfPoints(0);
+  //     this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
+  //     }
+  //   this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->InsertNextPoint(centerPosWorld);
+  //   this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(orient);
 
-  if (this->CurveClosed && markupsNode->GetNumberOfControlPoints() > 2 && !allNodesHidden)
-    {
-    double centerPosWorld[3], orient[3] = { 0 };
-    markupsNode->GetCenterPosition(centerPosWorld);
-    int centerControlPointType = allControlPointsSelected ? Selected : Unselected;
-    if (this->MarkupsDisplayNode->GetActiveComponentType() == vtkMRMLMarkupsDisplayNode::ComponentCenterPoint)
-      {
-      centerControlPointType = Active;
-      this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->SetNumberOfPoints(0);
-      this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->SetNumberOfTuples(0);
-      }
-    this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->InsertNextPoint(centerPosWorld);
-    this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->InsertNextTuple(orient);
-
-    this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->Modified();
-    this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->Modified();
-    this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->Modified();
-    if (centerControlPointType == Active)
-      {
-      this->GetControlPointsPipeline(centerControlPointType)->Actor->VisibilityOn();
-      this->GetControlPointsPipeline(centerControlPointType)->LabelsActor->VisibilityOff();
-      }
-    }
+  //   this->GetControlPointsPipeline(centerControlPointType)->ControlPoints->Modified();
+  //   this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->GetPointData()->GetNormals()->Modified();
+  //   this->GetControlPointsPipeline(centerControlPointType)->ControlPointsPolyData->Modified();
+  //   if (centerControlPointType == Active)
+  //     {
+  //     this->GetControlPointsPipeline(centerControlPointType)->Actor->VisibilityOn();
+  //     this->GetControlPointsPipeline(centerControlPointType)->LabelsActor->VisibilityOff();
+  //     }
+  //   }
 
   // Scalars
   this->LineMapper->SetScalarVisibility(this->MarkupsDisplayNode->GetScalarVisibility());
@@ -202,8 +182,7 @@ void vtkSlicerCurveRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller, unsigne
   if (this->MarkupsDisplayNode->GetScalarVisibility())
     {
     // Set active display property so that it can be distinguished, given that color cannot be used for this when scalars are visible
-    vtkProperty* activePipelineProperty =
-      reinterpret_cast<vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D*>(this->ControlPoints[Active])->Property;
+    vtkProperty* activePipelineProperty = this->ControlPointsPipelines.GetProperty(Active);
     this->PreviousSpecularLightingCoeff = activePipelineProperty->GetSpecular();
     activePipelineProperty->SetSpecular(1.0);
 
@@ -240,8 +219,7 @@ void vtkSlicerCurveRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller, unsigne
     }
   else
     {
-    vtkProperty* activePipelineProperty =
-      reinterpret_cast<vtkSlicerMarkupsWidgetRepresentation3D::ControlPointsPipeline3D*>(this->ControlPoints[Active])->Property;
+    vtkProperty* activePipelineProperty = this->ControlPointsPipelines.GetProperty(Active);
     activePipelineProperty->SetSpecular(this->PreviousSpecularLightingCoeff);
     }
 }

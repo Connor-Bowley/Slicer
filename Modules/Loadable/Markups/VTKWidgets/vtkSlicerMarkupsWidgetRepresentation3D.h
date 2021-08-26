@@ -34,6 +34,7 @@
 
 class vtkActor;
 class vtkActor2D;
+class vtkCamera;
 class vtkCellPicker;
 class vtkFastSelectVisiblePoints;
 class vtkGlyph3DMapper;
@@ -140,7 +141,50 @@ protected:
     vtkSmartPointer<vtkActor2D> LabelsOccludedActor;
   };
 
-  ControlPointsPipeline3D* GetControlPointsPipeline(int controlPointType);
+  class ControlPointsPipelineManager
+  {
+  public:
+    static constexpr int NumberOfControlPointTypes = vtkSlicerMarkupsWidgetRepresentation::NumberOfControlPointTypes;
+    ControlPointsPipelineManager(vtkSlicerMarkupsWidgetRepresentation3D& parent);
+    ControlPointsPipelineManager(const ControlPointsPipelineManager&) = delete;
+    ControlPointsPipelineManager& operator=(const ControlPointsPipelineManager&) = delete;
+    ControlPointsPipelineManager(ControlPointsPipelineManager&&) = delete;
+    ControlPointsPipelineManager& operator=(ControlPointsPipelineManager&&) = delete;
+    ~ControlPointsPipelineManager() = default;
+
+    void GetActors(vtkPropCollection *pc);
+    void ReleaseGraphicsResources(vtkWindow *win);
+    int RenderOpaqueGeometry(vtkViewport *viewport, bool updateControlPointSize, double controlPointSize);
+    int RenderTranslucentPolygonalGeometry(vtkViewport *viewport, vtkInformation* propertyKeys);
+    vtkTypeBool HasTranslucentPolygonalGeometry();
+    void UpdateAllPointsAndLabels(vtkMRMLMarkupsDisplayNode* markupsDisplayNode, double controlPointSize);
+    //Gets actors for Unselected, Selected, and Active pipelines
+    std::vector<vtkProp*> GetUSAActors();
+    void PrintSelf(ostream& os, vtkIndent indent);
+    void SetRenderer(vtkRenderer* ren);
+    void SetToleranceWorld(const double tolerance);
+    bool GetNthControlPointViewVisibility(int n, bool nIsSelected);
+    vtkSmartPointer<vtkTextProperty> GetTextProperty(int controlPointType);
+    vtkSmartPointer<vtkProperty> GetProperty(int controlPointType);
+    vtkSmartPointer<vtkProperty> GetOccludedProperty(int controlPointType);
+    //sets color of actor, text, and occluded
+    void SetColor(int controlPointType, double a[3]);
+    void SetColor(int controlPointType, double r, double g, double b);
+    void SetOpacity(int controlPointType, double opacity, double textBackgroundOpacity);
+    void SetOccludedOpacity(int controlPointType, double opacity, double textBackgroundOpacity);
+    void SetFontSize(int controlPointType, int size);
+    void SetGlyph3D();
+    void SetGlyph2D(int type);
+    void UpdateControlPointGlyphOrientation(vtkCamera* cam);
+    void UpdateZBuffer(vtkFloatArray*& zBuffer);
+    void SetAllPointsVisible();
+    int RenderOverlay(vtkViewport* viewport);
+
+  private:
+    //Minimize use of this. Will take away later
+    vtkSlicerMarkupsWidgetRepresentation3D& Parent;
+    ControlPointsPipeline3D ControlPointsPipelines[NumberOfControlPointTypes]; // Unselected, Selected, Active, Project, ProjectBehind
+  };
 
   virtual void UpdateControlPointGlyphOrientation();
 
@@ -170,7 +214,10 @@ protected:
   static void OnRenderCompleted(vtkObject* caller, unsigned long event, void* clientData, void* callData);
   static vtkFloatArray* GetCachedZBuffer(vtkRenderer* renderer);
 
+  //TODO: make private
+  ControlPointsPipelineManager ControlPointsPipelines;
 private:
+
   vtkSlicerMarkupsWidgetRepresentation3D(const vtkSlicerMarkupsWidgetRepresentation3D&) = delete;
   void operator=(const vtkSlicerMarkupsWidgetRepresentation3D&) = delete;
 };

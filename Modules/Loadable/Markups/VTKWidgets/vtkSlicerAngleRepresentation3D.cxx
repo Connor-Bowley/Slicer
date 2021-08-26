@@ -72,19 +72,19 @@ vtkSlicerAngleRepresentation3D::vtkSlicerAngleRepresentation3D()
   // Actors
   this->LineActor = vtkSmartPointer<vtkActor>::New();
   this->LineActor->SetMapper(this->LineMapper);
-  this->LineActor->SetProperty(this->GetControlPointsPipeline(Unselected)->Property);
+  this->LineActor->SetProperty(this->ControlPointsPipelines.GetProperty(Unselected));
 
   this->ArcActor = vtkSmartPointer<vtkActor>::New();
   this->ArcActor->SetMapper(this->ArcMapper);
-  this->ArcActor->SetProperty(this->GetControlPointsPipeline(Unselected)->Property);
+  this->ArcActor->SetProperty(this->ControlPointsPipelines.GetProperty(Unselected));
 
   this->LineOccludedActor = vtkSmartPointer<vtkActor>::New();
   this->LineOccludedActor->SetMapper(this->LineOccludedMapper);
-  this->LineOccludedActor->SetProperty(this->GetControlPointsPipeline(Unselected)->OccludedProperty);
+  this->LineOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(Unselected));
 
   this->ArcOccludedActor = vtkSmartPointer<vtkActor>::New();
   this->ArcOccludedActor->SetMapper(this->ArcOccludedMapper);
-  this->ArcOccludedActor->SetProperty(this->GetControlPointsPipeline(Unselected)->OccludedProperty);
+  this->ArcOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(Unselected));
 
   this->HideTextActorIfAllPointsOccluded = true;
 }
@@ -223,11 +223,11 @@ void vtkSlicerAngleRepresentation3D::UpdateFromMRML(vtkMRMLNode* caller, unsigne
     {
     controlPointType = this->GetAllControlPointsSelected() ? Selected : Unselected;
     }
-  this->LineActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->Property);
-  this->ArcActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->Property);
-  this->TextActor->SetTextProperty(this->GetControlPointsPipeline(controlPointType)->TextProperty);
-  this->LineOccludedActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->OccludedProperty);
-  this->ArcOccludedActor->SetProperty(this->GetControlPointsPipeline(controlPointType)->OccludedProperty);
+  this->LineActor->SetProperty(this->ControlPointsPipelines.GetProperty(controlPointType));
+  this->ArcActor->SetProperty(this->ControlPointsPipelines.GetProperty(controlPointType));
+  this->TextActor->SetTextProperty(this->ControlPointsPipelines.GetTextProperty(controlPointType));
+  this->LineOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(controlPointType));
+  this->ArcOccludedActor->SetProperty(this->ControlPointsPipelines.GetOccludedProperty(controlPointType));
 }
 
 //----------------------------------------------------------------------

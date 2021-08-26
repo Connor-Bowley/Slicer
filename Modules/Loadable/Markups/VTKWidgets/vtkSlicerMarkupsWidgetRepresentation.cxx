@@ -143,11 +143,6 @@ vtkSlicerMarkupsWidgetRepresentation::vtkSlicerMarkupsWidgetRepresentation()
 
   this->PointPlacer = vtkSmartPointer<vtkFocalPlanePointPlacer>::New();
 
-  for (int i = 0; i<NumberOfControlPointTypes; i++)
-    {
-    this->ControlPoints[i] = nullptr;
-    }
-
   this->AlwaysOnTop = false;
 
   this->InteractionPipeline = nullptr;
@@ -163,11 +158,6 @@ void vtkSlicerMarkupsWidgetRepresentation::SetupInteractionPipeline()
 //----------------------------------------------------------------------
 vtkSlicerMarkupsWidgetRepresentation::~vtkSlicerMarkupsWidgetRepresentation()
 {
-  for (int i=0; i<NumberOfControlPointTypes; i++)
-    {
-    delete this->ControlPoints[i];
-    this->ControlPoints[i] = nullptr;
-    }
   // Force deleting variables to prevent circular dependency keeping objects alive
   this->PointPlacer = nullptr;
 
@@ -730,39 +720,6 @@ double* vtkSlicerMarkupsWidgetRepresentation::GetWidgetColor(int controlPointTyp
 vtkPointPlacer* vtkSlicerMarkupsWidgetRepresentation::GetPointPlacer()
 {
   return this->PointPlacer;
-}
-
-//----------------------------------------------------------------------
-vtkPolyData* vtkSlicerMarkupsWidgetRepresentation::GetControlPointsPolyData(int controlPointType)
-{
-  if (controlPointType < 0 || controlPointType >= NumberOfControlPointTypes)
-    {
-    vtkErrorMacro("vtkSlicerMarkupsWidgetRepresentation::GetControlPointsPolyData failed: invalid controlPointType: " << controlPointType);
-    return nullptr;
-    }
-  return this->ControlPoints[controlPointType]->ControlPointsPolyData;
-}
-
-//----------------------------------------------------------------------
-vtkPolyData* vtkSlicerMarkupsWidgetRepresentation::GetLabelControlPointsPolyData(int controlPointType)
-{
-  if (controlPointType < 0 || controlPointType >= NumberOfControlPointTypes)
-    {
-    vtkErrorMacro("vtkSlicerMarkupsWidgetRepresentation::GetLabelControlPointsPolyData failed: invalid controlPointType: " << controlPointType);
-    return nullptr;
-    }
-  return this->ControlPoints[controlPointType]->LabelControlPointsPolyData;
-}
-
-//----------------------------------------------------------------------
-vtkStringArray* vtkSlicerMarkupsWidgetRepresentation::GetLabels(int controlPointType)
-{
-  if (controlPointType < 0 || controlPointType >= NumberOfControlPointTypes)
-    {
-    vtkErrorMacro("vtkSlicerMarkupsWidgetRepresentation::GetLabels failed: invalid controlPointType: " << controlPointType);
-    return nullptr;
-    }
-  return this->ControlPoints[controlPointType]->Labels;
 }
 
 //-----------------------------------------------------------------------------

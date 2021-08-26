@@ -105,15 +105,10 @@ vtkSlicerMarkupsWidgetRepresentation2D::ControlPointsPipeline2D::~ControlPointsP
 //----------------------------------------------------------------------
 vtkSlicerMarkupsWidgetRepresentation2D::vtkSlicerMarkupsWidgetRepresentation2D()
 {
-  for (int i = 0; i<NumberOfControlPointTypes; i++)
-    {
-    this->ControlPoints[i] = new ControlPointsPipeline2D;
-    }
-
-  this->ControlPoints[Selected]->TextProperty->SetColor(1.0, 0.5, 0.5);
+  this->GetControlPointsPipeline(Selected)->TextProperty->SetColor(1.0, 0.5, 0.5);
   this->GetControlPointsPipeline(Selected)->Property->SetColor(1.0, 0.5, 0.5);
 
-  this->ControlPoints[Active]->TextProperty->SetColor(0.4, 1.0, 0.); // bright green
+  this->GetControlPointsPipeline(Active)->TextProperty->SetColor(0.4, 1.0, 0.); // bright green
   this->GetControlPointsPipeline(Active)->Property->SetColor(0.4, 1.0, 0.);
 
   this->TextActor->SetTextProperty(this->GetControlPointsPipeline(Unselected)->TextProperty);
@@ -884,7 +879,7 @@ void vtkSlicerMarkupsWidgetRepresentation2D::PrintSelf(ostream& os, vtkIndent in
 //-----------------------------------------------------------------------------
 vtkSlicerMarkupsWidgetRepresentation2D::ControlPointsPipeline2D* vtkSlicerMarkupsWidgetRepresentation2D::GetControlPointsPipeline(int controlPointType)
 {
-  return static_cast<ControlPointsPipeline2D*>(this->ControlPoints[controlPointType]);
+  return this->ControlPointsPipelines.GetControlPointsPipeline(controlPointType);
 }
 
 //---------------------------------------------------------------------------

@@ -131,16 +131,6 @@ public:
 
   virtual vtkPointPlacer* GetPointPlacer();
 
-  /// Get internal control points polydata - for testing purposes.
-  /// controlPointType can be Unselected, Selected, Active, Project, ProjectBack.
-  virtual vtkPolyData* GetControlPointsPolyData(int controlPointType);
-  /// Get internal label control points polydata - for testing purposes.
-  /// controlPointType can be Unselected, Selected, Active, Project, ProjectBack.
-  virtual vtkPolyData* GetLabelControlPointsPolyData(int pipeline);
-  /// Get internal labels list - for testing purposes.
-  /// controlPointType can be Unselected, Selected, Active, Project, ProjectBack.
-  virtual vtkStringArray* GetLabels(int pipeline);
-
   //@{
   /**
   * Returns true if the representation is displayable in the current view.
@@ -165,6 +155,10 @@ protected:
   {
   public:
     ControlPointsPipeline();
+    ControlPointsPipeline(const ControlPointsPipeline&) = delete;
+    ControlPointsPipeline& operator=(const ControlPointsPipeline&) = delete;
+    ControlPointsPipeline(ControlPointsPipeline&&) = delete;
+    ControlPointsPipeline& operator=(ControlPointsPipeline&&) = delete;
     virtual ~ControlPointsPipeline();
 
     /// Specify the glyph that is displayed at each control point position.
@@ -330,8 +324,6 @@ protected:
   vtkTimeStamp MarkupsTransformModifiedTime;
 
   double* GetWidgetColor(int controlPointType);
-
-  ControlPointsPipeline* ControlPoints[NumberOfControlPointTypes]; // Unselected, Selected, Active, Project, ProjectBehind
 
   virtual void SetupInteractionPipeline();
   MarkupsInteractionPipeline* InteractionPipeline;
