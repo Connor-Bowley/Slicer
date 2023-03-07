@@ -1,4 +1,6 @@
 import copy
+import dataclasses
+import itertools
 import typing
 
 import slicer
@@ -26,6 +28,12 @@ __all__ = [
 ]
 
 
+@dataclasses.dataclass
+class ParentalReference:
+    parent: object
+    name: str
+
+
 def _implName(name: str) -> str:
     return f"_parameterPack_{name}_impl"
 
@@ -42,40 +50,100 @@ def _readValue(self, name: str):
     return getattr(self, _implName(name))
 
 
-def _writeValue(self, name: str, value) -> None:
-    _getSerializer(self, name).validate(value)
-    setattr(self, _implName(name), value)
+def _removeParentIfNeeded(self, name):
+    # note: if we are in the constructor, the _implName(name) may not exist yet.
+    oldValue = getattr(self, _implName(name), None)
+    if oldValue is not None and isParameterPack(oldValue):
+        oldValue._parameterPack_parent = None
+
+
+def _clonePack(pack):
+    """
+    Clones pack items, but not parent.
+    Will clone an observed pack into a non-observed one
+    """
+    args = {}
+    for paramName in pack.allParameters.keys():
+        value = pack.getValue(paramName)
+        if isParameterPack(value):
+            args[paramName] = _clonePack(value)
+        else:
+            args[paramName] = copy.deepcopy(value)
+    
+    # If pack is an ObservedParameterPack, get the unobserved version.
+    if type(pack) in _observedParameterPacks.values():
+        return list(_observedParameterPacks.keys())[list(_observedParameterPacks.values()).index(type(pack))](**args)
+    else:
+        return type(pack)(**args)
+
+
+def _checkParentInvariant(pack, values):
+    """
+    Checks invariants of the parent when the child has values set to it
+    """
+    if hasattr(pack, "_parameterPack_parent") and pack._parameterPack_parent is not None:
+        parent = pack._parameterPack_parent.parent
+        newPack = _clonePack(pack)
+        newPack._parameterPack_parent = None
+        newPack.setValues(values)
+        updatedValues = {pack._parameterPack_parent.name: newPack}
+        if hasattr(parent, "_invariant"):
+            parent._invariant(**updatedValues)
+
+        _checkParentInvariant(parent, updatedValues)
+
+
+def _writeValues(self, values: dict[str, typing.Any]) -> None:
+    _checkParentInvariant(self, values)
+
+    # check validators
+    for name, value in values.items():
+        _getSerializer(self, name).validate(value)
+    # check invariants
+    if hasattr(self, "_invariant"):
+        self._invariant(**values)
+    # set values
+    for name, value in values.items():
+        _removeParentIfNeeded(self, name)
+        if isParameterPack(value):
+            value._parameterPack_parent = ParentalReference(self, name)
+        setattr(self, _implName(name), value)
 
 
 def _makeConcreteProperty(name: str):
     return property(
         lambda self: _readValue(self, name),
-        lambda self, value: _writeValue(self, name, value)
+        lambda self, value: _writeValues(self, {name: value})
     )
 
 
 def _initMethod(self, *args, **kwargs) -> None:
+    self._parameterPack_parent = None
     parameters = copy.copy(self.allParameters)
+    values: dict[str, typing.Any] = dict()
 
-    def setImpl(name, value):
-        _writeValue(self, name, value)
+    def markParameter(name, value):
+        values[name] = value
         parameters[name] = None
+
     # positional args
     parametersValues = list(parameters.values())
     for index, arg in enumerate(args):
         name = parametersValues[index].basename
-        setImpl(name, arg)
+        markParameter(name, arg)
     # keyword args
     for paramName, value in kwargs.items():
         if paramName not in parameters:
             raise TypeError(f"__init__() got an unexpected keyword argument '{paramName}'")
         if parameters[paramName] is None:
             raise TypeError(f"__init__() got multiple values for argument '{paramName}'")
-        setImpl(paramName, value)
+        markParameter(paramName, value)
     # unspecified default values
     for paramName, parameterInfo in parameters.items():
         if parameterInfo is not None:
-            setImpl(parameterInfo.basename, parameterInfo.default)
+            markParameter(parameterInfo.basename, copy.deepcopy(parameterInfo.default))
+
+    _writeValues(self, values)
 
 
 def _eqMethod(self, other) -> bool:
@@ -143,14 +211,45 @@ def _getValue(self, membername):
         return _getValue(topnameValue, subname)
 
 
+def _setValues(self, values):
+    valueNames = list(values.keys())
+    for valueName in valueNames:
+        _checkTopMember(self, valueName)
+
+    for name in set(valueNames):
+        splitName = name.split('.')
+        for i in range(len(splitName)):
+            valueNames.append('.'.join(splitName[:i + 1]))
+    valueNames = sorted(set(valueNames), key=lambda x: (-x.count('.'), x))
+
+    for depth, depthValues in itertools.groupby(valueNames, lambda x: x.count('.')):
+        depthValues = sorted(depthValues)
+        if depth > 0:
+            for commonName, fullNames in itertools.groupby(depthValues, lambda x: x[:x.rfind('.')]):
+                fullNames = list(fullNames)
+                partialNames = [x[x.rfind('.') + 1:] for x in fullNames]
+                commonPiece = self.getValue(commonName)
+                if isParameterPack(commonPiece):
+                    commonPiece = _clonePack(commonPiece)
+                else:
+                    commonPiece = copy.deepcopy(commonPiece)
+                partialValues = {
+                    partialName: values[f"{commonName}.{partialName}"]
+                    for partialName in partialNames
+                    if f"{commonName}.{partialName}" in values
+                }
+                _setValues(commonPiece, partialValues)
+                values[commonName] = commonPiece
+        else:  # depth == 0
+            topLevelValues = {
+                v: values[v]
+                for v in depthValues
+            }
+            _writeValues(self, topLevelValues)
+
+
 def _setValue(self, membername, value):
-    _checkTopMember(self, membername)
-    topname, subname = splitPossiblyDottedName(membername)
-    if subname is None:
-        setattr(self, topname, value)
-    else:
-        topnameValue = getattr(self, topname)
-        _setValue(topnameValue, subname, value)
+    _setValues(self, {membername: value})
 
 
 def _makeDataTypeFunc(classvar):
@@ -166,7 +265,7 @@ def _makeDataTypeFunc(classvar):
     return dataType
 
 
-def _processParameterPack(classtype):
+def _processParameterPack(classtype, invariant):
     members = typing.get_type_hints(classtype, include_extras=True)
     if len(members) == 0:
         raise ValueError("Unable to find any members in parameterPack")
@@ -216,7 +315,10 @@ def _processParameterPack(classtype):
     checkedSetAttr(classtype, "_is_parameterPack", True)
     checkedSetAttr(classtype, "getValue", _getValue)
     checkedSetAttr(classtype, "setValue", _setValue)
+    checkedSetAttr(classtype, "setValues", _setValues)
     checkedSetAttr(classtype, "dataType", _makeDataTypeFunc(classtype))
+    if invariant is not None:
+        checkedSetAttr(classtype, "_invariant", invariant)
     return classtype
 
 
@@ -235,12 +337,12 @@ def nestedParameterNames(parameterPackClassOrInstance) -> list[str]:
     return names
 
 
-def parameterPack(classtype=None):
+def parameterPack(classtype=None, invariant=None):
     """
     Class decorator to make an parameterPack.
     """
     def wrap(cls):
-        return _processParameterPack(cls)
+        return _processParameterPack(cls, invariant)
 
     # See if we're being called as @parameterPack or @parameterPack().
     if classtype is None:
@@ -248,68 +350,97 @@ def parameterPack(classtype=None):
     return wrap(classtype)
 
 
-class ObservedParameterPack:
-    """
-    Class with the ability to observe any parameterPack and write on change.
-    """
-    def __init__(self, parameterNode, serializer: Serializer, name: str, startingValue):
-        # Because we are overriding __getattr__ and __setattr__ to pass through to _value
-        # we need to access this class's members directly through the super methods
-        super().__setattr__('_parameterNode', parameterNode)
-        super().__setattr__('_serializer', serializer)
-        super().__setattr__('_name', name)
-        super().__setattr__('_value', startingValue)
+@dataclasses.dataclass
+class _ObservedParameterPackValues:
+    parameterNode: slicer.vtkMRMLScriptedModuleNode
+    serializer: Serializer
+    name: str
+    frozen: bool = False
 
-    def __str__(self) -> str:
-        return f"Observed({str(super().__getattribute__('_value'))})"
 
-    def __repr__(self) -> str:
-        return str(self)
-
-    def _setValue(self, name: str, value):
-        myValue = super().__getattribute__('_value')
-        myValue.setValue(name, value)
+def _makeObservedProperty(superType, name: str):
+    def setter(self, value):
+        getattr(superType, name).fset(self, value)
         self._save()
 
-    def __getattr__(self, name: str):
-        if name == "setValue":
-            return super().__getattribute__('_setValue')
-        else:
-            myValue = super().__getattribute__('_value')
-            if hasattr(myValue, name):
-                return getattr(myValue, name)
-            else:
-                raise AttributeError(f"'{str(self._serializer.type)}' has no attribute '{name}'")
+    return property(
+        lambda self: getattr(superType, name).fget(self),
+        setter,
+    )
 
-    def __setattr__(self, name: str, value) -> None:
-        myValue = super().__getattribute__('_value')
-        if hasattr(myValue, name):
-            setattr(myValue, name, value)
+
+def createObservedParameterPackImpl(packType):
+    class ObservedParameterPack(packType):
+        def __init__(self,
+                     parameterNode: slicer.vtkMRMLScriptedModuleNode,
+                     serializer: Serializer,
+                     name: str,
+                     args: dict[str, typing.Any]):
+            super().__setattr__("_observedPackValues", _ObservedParameterPackValues(parameterNode, serializer, name))
+            super().__init__(**args)
+            self._observedPackValues.frozen = True
+
+        # prevent new attributes from being added dynamically
+        def __setattr__(self, key, value):
+            if self._observedPackValues.frozen and not hasattr(self, key):
+                raise AttributeError(f"'ObservedParameterPack({packType.__name__})' has no attribute '{key}'"
+                                     " and attributes cannot be added dynamcially")
+            super().__setattr__(key, value)
+
+        def __str__(self) -> str:
+            strParams = [
+                f"{parameter.basename}={_quoteIfStr(_readValue(self, parameter.basename))}"
+                for parameter in self.allParameters.values()
+            ]
+            return f"Observed({packType.__name__}({', '.join(strParams)}))"
+
+        def __repr__(self) -> str:
+            return str(self)
+
+        def _save(self) -> None:
+            serializer = self._observedPackValues.serializer
+            parameterNode = self._observedPackValues.parameterNode
+            name = self._observedPackValues.name
+            with slicer.util.NodeModify(parameterNode):
+                try:
+                    serializer.write(parameterNode, name, self)
+                finally:
+                    # resetting the _value here helps if there are nested observed items (lists, dicts,
+                    # parameterPacks, etc)
+                    serializer.readInto(parameterNode, name, super())
+
+        def setValue(self, name: str, value: typing.Any):
+            super().setValue(name, value)
             self._save()
-        else:
-            serializer = super().__getattribute__('_serializer')
-            raise AttributeError(f"'{str(serializer.type)}' has no attribute '{name}'"
-                                 " and attributes cannot be added dynamcially")
 
-    def _save(self) -> None:
-        serializer = super().__getattribute__('_serializer')
-        parameterNode = super().__getattribute__('_parameterNode')
-        name = super().__getattribute__('_name')
-        value = super().__getattribute__('_value')
-        with slicer.util.NodeModify(parameterNode):
-            try:
-                serializer.write(parameterNode, name, value)
-            finally:
-                # resetting the _value here helps if there are nested observed items (lists, dicts,
-                # parameterPacks, etc)
-                readValue = serializer.read(parameterNode, name)
-                super().__setattr__('_value', super(ObservedParameterPack, readValue).__getattribute__('_value'))
+        def setValues(self, values: dict[str, typing.Any]) -> None:
+            super().setValues(values)
+            self._save()
 
-    def __eq__(self, other) -> bool:
-        if isinstance(other, ObservedParameterPack) and self._serializer.type == other._serializer.type:
-            return super().__getattribute__('_value') == super(ObservedParameterPack, other).__getattribute__('_value')
-        else:
-            return super().__getattribute__('_value') == other
+        def __eq__(self, other) -> bool:
+            if type(self) == type(other):
+                return packType.__eq__(self, other)
+            elif packType == type(other):
+                return all([
+                    self.getValue(name) == other.getValue(name)
+                    for name in self.allParameters.keys()
+                ])
+            else:
+                return False
+
+    for paramName in packType.allParameters.keys():
+        setattr(ObservedParameterPack, paramName, _makeObservedProperty(packType, paramName))
+    return ObservedParameterPack
+
+
+_observedParameterPacks = dict()
+
+
+def createObservedParameterPack(packType, parameterNode, serializer, name, args: dict[str, typing.Any]):
+    global _observedParameterPacks
+    if packType not in _observedParameterPacks:
+        _observedParameterPacks[packType] = createObservedParameterPackImpl(packType)
+    return _observedParameterPacks[packType](parameterNode, serializer, name, args)
 
 
 class _ParameterPackInstanceValidator(Validator):
@@ -321,9 +452,8 @@ class _ParameterPackInstanceValidator(Validator):
         self.type = type_
 
     def validate(self, value) -> None:
-        checkValue = super(ObservedParameterPack, value).__getattribute__('_value') if isinstance(value, ObservedParameterPack) else value
-        if not isinstance(checkValue, self.type):
-            raise ValueError(f"Value must be of type '{self.classtype}', is type 'type({checkValue})'")
+        if not isinstance(value, self.type):
+            raise ValueError(f"Value must be of type '{self.classtype}', is type 'type({value})'")
 
 
 @parameterNodeSerializer
@@ -369,21 +499,27 @@ class ParameterPackSerializer(Serializer):
             parameter.serializer.remove(parameterNode, mangledName)
 
     def write(self, parameterNode, name: str, value) -> None:
-        if isinstance(value, ObservedParameterPack):
-            value = super(ObservedParameterPack, value).__getattribute__('_value')
         with slicer.util.NodeModify(parameterNode):
             for parameter in self._allParameters.values():
                 mangledName = self._mangleName(parameter, name)
                 parameterValue = _readValue(value, parameter.basename)
                 parameter.serializer.write(parameterNode, mangledName, parameterValue)
 
-    def read(self, parameterNode, name: str):
-        result = self.type()
+    def readInto(self, parameterNode, name: str, value):
+        args = dict()
         for parameter in self._allParameters.values():
             mangledName = self._mangleName(parameter, name)
             parameterValue = parameter.serializer.read(parameterNode, mangledName)
-            _writeValue(result, parameter.basename, parameterValue)
-        return ObservedParameterPack(parameterNode, self, name, result)
+            args[parameter.basename] = parameterValue
+        value.setValues(args)
+
+    def read(self, parameterNode, name: str):
+        args = dict()
+        for parameter in self._allParameters.values():
+            mangledName = self._mangleName(parameter, name)
+            parameterValue = parameter.serializer.read(parameterNode, mangledName)
+            args[parameter.basename] = parameterValue
+        return createObservedParameterPack(self.type, parameterNode, self, name, args)
 
     def supportsCaching(self) -> bool:
         return all([parameter.serializer.supportsCaching() for parameter in self._allParameters.values()])

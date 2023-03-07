@@ -24,6 +24,65 @@ class BoundingBox:
     bottomRight: Point
 
 
+class BadDateException(ValueError):
+    pass
+
+
+# Note: Can use None as the sentinel value here because it is an invalid value for
+# month, day, and year. If None is a valid value, would need to use some other sentinel
+# (probably a custom class made just for that purpose).
+def validateDate(date, month=None, day=None, year=None):
+    month = month if month is not None else date.month
+    day = day if day is not None else date.day
+    year = year if year is not None else date.year
+
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        raise BadDateException(f"Bad date: {month}/{day}/{year}")
+    if month == 2 and day > 28:
+        raise BadDateException(f"Bad date: {month}/{day}/{year}")
+    if month in (4, 6, 9, 11) and day > 30:
+        raise BadDateException(f"Bad date: {month}/{day}/{year}")
+
+
+@parameterPack(invariant=validateDate)
+class Date:
+    month: Annotated[int, Default(1)]
+    day: Annotated[int, Default(1)]
+    year: Annotated[int, Default(1970)]
+
+    def setDate(self, month: int, day: int, year: int):
+        # need to set all at once so the invariant will pass
+        self.setValues({"month": month, "day": day, "year": year})
+
+    def __lt__(self, other):
+        return self.year < other.year \
+            or self.year == other.year and self.month < other.month \
+            or self.year == other.year and self.month == other.month and self.day < other.day
+
+    def __le__(self, other):
+        return not other < self
+
+
+class BadDateRangeException(ValueError):
+    pass
+
+
+# Note: Can use None as the sentinel value here because it is an invalid value for
+# month, day, and year. If None is a valid value, would need to use some other sentinel
+# (probably a custom class made just for that purpose).
+def validateDateRange(dateRange, start=None, end=None):
+    start = start if start is not None else dateRange.start
+    end = end if end is not None else dateRange.end
+    if not start <= end:
+        raise BadDateRangeException(f"Bad date range: {start} < {end}")
+
+
+@parameterPack(invariant=validateDateRange)
+class DateRange:
+    start: Date
+    end: Date
+
+
 class TypedParameterNodeTest(unittest.TestCase):
     def setUp(self):
         slicer.mrmlScene.Clear(0)
@@ -344,6 +403,23 @@ class TypedParameterNodeTest(unittest.TestCase):
         self.assertEqual(pack.getValue("box"), BoundingBox(Point(-99, 8), Point(11, 10)))
         self.assertEqual(pack.getValue("box.topLeft.x"), -99)
 
+        pack.setValues({
+            "box": BoundingBox(),
+            "value": 357,
+        })
+        self.assertEqual(pack.getValue("box"), BoundingBox())
+        self.assertEqual(pack.getValue("value"), 357)
+
+        pack.setValues({
+            "box.topLeft.x": 88,
+            "box.bottomRight.x": 77,
+            "value": 993,
+        })
+        self.assertEqual(pack.getValue("box"), BoundingBox(Point(88, 0), Point(77, 0)))
+        self.assertEqual(pack.getValue("value"), 993)
+
+        self.assertEqual(BoundingBox(), BoundingBox(Point(0, 0), Point(0, 0)))
+
     def test_parameter_pack_getSetValue_updates(self):
         @parameterPack
         class ParameterPack:
@@ -419,3 +495,115 @@ class TypedParameterNodeTest(unittest.TestCase):
         # add weird recursive use
         param.any = AnyPack(Point(3, 4))
         self.assertEqual(param.any.any, Point(3, 4))
+
+    def test_parameter_pack_invariants(self):
+        self.assertEqual(Date(), Date(1, 1, 1970))
+        with self.assertRaises(BadDateException):
+            Date(0, 1, 1970)
+        with self.assertRaises(BadDateException):
+            Date(13, 1, 1970)
+        with self.assertRaises(BadDateException):
+            Date(1, 0, 1970)
+        with self.assertRaises(BadDateException):
+            Date(1, 32, 1970)
+        with self.assertRaises(BadDateException):
+            Date(2, 29, 1970)
+
+        date = Date()
+        with self.assertRaises(BadDateException):
+            date.month = 0
+        self.assertEqual(date.month, 1)
+        date = Date()
+        with self.assertRaises(BadDateException):
+            date.month = 55
+        self.assertEqual(date.month, 1)
+        date.month = 2
+        with self.assertRaises(BadDateException):
+            date.day = 30
+
+        date.setValue("month", 4)
+        with self.assertRaises(BadDateException):
+            date.setValue("day", 31)
+
+        date.setValues({
+            "day": 31,
+            "month": 5,
+        })
+
+        date.setDate(1, 31, 1980)
+        self.assertEqual(date, Date(1, 31, 1980))
+
+        with self.assertRaises(BadDateException):
+            date.month = 44
+
+    def test_parameter_pack_invariants_in_wrapper(self):
+        @parameterNodeWrapper
+        class ParameterNodeType:
+            date: Date
+            date2: Annotated[Date, Default(Date(2, 28, 2028))]
+
+        param = ParameterNodeType(newParameterNode())
+        self.assertEqual(param.date, Date())
+        self.assertEqual(param.date2, Date(2, 28, 2028))
+
+        with self.assertRaises(BadDateException):
+            param.date.month = 0
+        self.assertEqual(param.date.month, 1)
+        with self.assertRaises(BadDateException):
+            param.date.month = 55
+        self.assertEqual(param.date.month, 1)
+        param.date.month = 2
+        with self.assertRaises(BadDateException):
+            param.date.day = 30
+
+        param.date.setDate(1, 31, 1980)
+        self.assertEqual(param.date, Date(1, 31, 1980))
+
+        self.assertEqual(param.parameterNode.GetParameter("date.month"), "1")
+
+        with self.assertRaises(BadDateException):
+            param.date.month = 44
+
+    def test_parameter_pack_nested_invariants(self):
+        self.assertEqual(DateRange(), DateRange(Date(1, 1, 1970), Date(1, 1, 1970)))
+        with self.assertRaises(BadDateRangeException):
+            DateRange(Date(1, 1, 1970), Date(1, 1, 1969))
+        with self.assertRaises(BadDateRangeException):
+            DateRange(Date(1, 2, 1970), Date(1, 1, 1970))
+        with self.assertRaises(BadDateRangeException):
+            DateRange(Date(2, 1, 1970), Date(1, 1, 1970))
+
+        dateRange = DateRange()
+        with self.assertRaises(BadDateException):
+            dateRange.start.month = 0
+        self.assertEqual(dateRange, DateRange(Date(1, 1, 1970), Date(1, 1, 1970)))
+
+        with self.assertRaises(BadDateRangeException):
+            dateRange.setValue("start.month", 2)
+        self.assertEqual(dateRange, DateRange(Date(1, 1, 1970), Date(1, 1, 1970)))
+
+        with self.assertRaises(BadDateRangeException):
+            dateRange.start.month = 2
+        self.assertEqual(dateRange, DateRange(Date(1, 1, 1970), Date(1, 1, 1970)))
+
+        with self.assertRaises(BadDateRangeException):
+            dateRange.start = Date(2, 1, 1970)
+        self.assertEqual(dateRange, DateRange(Date(1, 1, 1970), Date(1, 1, 1970)))
+
+        # take a pack and switch up its parents
+        oldEnd = dateRange.end
+        dateRange.end = Date(2, 1, 1970)
+        self.assertEqual(dateRange, DateRange(Date(1, 1, 1970), Date(2, 1, 1970)))
+        self.assertIsNone(oldEnd._parameterPack_parent)
+        self.assertEqual(oldEnd, Date(1, 1, 1970))
+        oldEnd.year = 1969
+        oldEnd.month = 2
+        oldEnd.day = 1
+        self.assertEqual(oldEnd, Date(2, 1, 1969))
+
+        dateRange2 = DateRange(start=Date(1, 5, 1969), end=oldEnd)
+        self.assertIs(oldEnd, dateRange2.end)
+        self.assertEqual(dateRange2, DateRange(Date(1, 5, 1969), Date(2, 1, 1969)))
+        with self.assertRaises(BadDateRangeException):
+            oldEnd.month = 1
+        self.assertEqual(dateRange2, DateRange(Date(1, 5, 1969), Date(2, 1, 1969)))
